@@ -1,0 +1,1032 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- FastAPI から注入 -->
+  <meta name="google-client-id" content="{{ GOOGLE_CLIENT_ID }}">
+  <meta name="google-api-key" content="{{ GOOGLE_API_KEY }}">
+  <meta name="spreadsheet-id" content="{{ SPREADSHEET_ID }}">
+
+  <title>キャスト管理システム v1.3</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    .view { display: none; }
+    .view.active { display: block; }
+    .modal-backdrop { background-color: rgba(0, 0, 0, 0.5); }
+    .gemini-output {
+      background-color: #f0f9ff;
+      border-left: 4px solid #0284c7;
+      padding: 8px;
+      font-size: 0.875rem;
+      line-height: 1.5;
+      color: #0c4a6e;
+    }
+  </style>
+</head>
+<body class="bg-gray-100 text-gray-800">
+
+<header class="bg-white shadow-md sticky top-0 z-40">
+  <nav class="container mx-auto px-4 sm:px-6 py-3 flex justify-between items-center">
+    <h1 class="text-xl sm:text-2xl font-bold text-gray-800">キャスト管理システム ✨</h1>
+    <div class="hidden md:flex items-center space-x-4">
+      <button id="nav-casting" class="nav-btn text-blue-600 border-b-2 border-blue-600 font-medium px-2 py-1">キャストを探す</button>
+      <button id="nav-status" class="nav-btn text-gray-600 hover:text-blue-600 font-medium px-2 py-1">キャスティング状況</button>
+      <button id="nav-management" class="nav-btn text-gray-600 hover:text-blue-600 font-medium px-2 py-1">管理画面</button>
+      <button id="nav-cart" class="relative text-gray-600 hover:text-blue-600">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
+        <span id="cart-count" class="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">0</span>
+      </button>
+    </div>
+    <div id="auth-container" class="hidden md:flex items-center">
+      <span id="user-name" class="hidden text-sm text-gray-700 mr-4"></span>
+      <button id="authorize_button" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-lg transition">サインイン</button>
+      <button id="signout_button" class="hidden bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg">サインアウト</button>
+    </div>
+  </nav>
+</header>
+
+<main class="container mx-auto p-4 sm:p-6">
+  <div id="loader" class="fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center z-50">
+    <div class="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-blue-500"></div>
+    <p class="text-white text-lg ml-4">データを読み込んでいます...</p>
+  </div>
+  <div id="message-box" class="hidden fixed top-20 right-5 bg-green-500 text-white py-2 px-4 rounded-lg shadow-lg z-50"></div>
+
+  <!-- Casting -->
+  <div id="casting-view" class="view">
+    <div class="grid grid-cols-1 lg:grid-cols-4 gap-8">
+      <div class="lg:col-span-1 bg-white p-6 rounded-lg shadow-md h-fit">
+        <h2 class="text-2xl font-bold mb-4">1. 日付を選択</h2>
+        <div id="calendar-container">
+          <div class="flex justify-between items-center mb-4">
+            <button id="prev-month" class="px-3 py-1 bg-gray-200 rounded-md hover:bg-gray-300">&lt;</button>
+            <h3 id="current-month-year" class="text-lg font-semibold"></h3>
+            <button id="next-month" class="px-3 py-1 bg-gray-200 rounded-md hover:bg-gray-300">&gt;</button>
+          </div>
+          <div id="calendar-grid" class="grid grid-cols-7 gap-1 text-center text-sm"></div>
+        </div>
+
+        <hr class="my-6">
+        <h2 class="text-2xl font-bold mb-4">2. 絞り込み</h2>
+        <div id="filters-container" class="space-y-4"></div>
+      </div>
+
+      <div class="lg:col-span-3">
+        <h2 class="text-2xl font-bold mb-2">3. キャストを選択</h2>
+        <p id="selected-period-display" class="text-gray-600 mb-4">カレンダーから日付を選択してください</p>
+        <div id="cast-list" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 max-h-[75vh] overflow-y-auto p-2"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Status -->
+  <div id="status-view" class="view">
+    <h2 class="text-3xl font-bold mb-4">キャスティング状況</h2>
+  </div>
+
+  <div id="management-view" class="view">
+    <h2 class="text-3xl font-bold">管理画面</h2>
+  </div>
+</main>
+
+<!-- Cart modal -->
+<div id="cart-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center modal-backdrop"></div>
+<!-- Small edit modal -->
+<div id="edit-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center modal-backdrop"></div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  // ========= Config =========
+  const CLIENT_ID = document.querySelector('meta[name="google-client-id"]')?.content || '';
+  const SPREADSHEET_ID = document.querySelector('meta[name="spreadsheet-id"]')?.content || '';
+  const API_KEY = document.querySelector('meta[name="google-api-key"]')?.content || '';
+  const DISCOVERY_DOCS = [
+    "https://sheets.googleapis.com/$discovery/rest?version=v4",
+    "https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest",
+    "https://www.googleapis.com/discovery/v1/apis/oauth2/v2/rest"
+  ];
+  const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email';
+
+  // ========= State =========
+  let tokenClient, gapiInited=false, gisInited=false;
+  let currentUser=null, isAdmin=false;
+  let castData=[], castingData=[], adminUsers=[];
+  let cart = {}; // { [castId]: { cast, dates: string[], roleName?: string } }
+  let selectedDates=[];
+  let calendarDate = new Date();
+  let statusMonth = loadStatusMonth() || new Date();
+  let showPast = false;
+
+  const loader = document.getElementById('loader');
+
+  // ========= Helpers =========
+  const pad2 = n => String(n).padStart(2,'0');
+  const d2str = d => `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+  const TODAY_STR = d2str(new Date());
+  const TODAY_EPOCH = toEpochDay(TODAY_STR);
+
+  function showLoader(show){ if(loader) loader.style.display = show ? 'flex' : 'none'; }
+  function showMessage(message, type='success'){
+    const box = document.getElementById('message-box'); if(!box) return;
+    box.textContent = message;
+    box.className = 'fixed top-20 right-5 text-white py-2 px-4 rounded-lg shadow-lg z-50';
+    box.classList.add(type==='success'?'bg-green-500':(type==='error'?'bg-red-500':'bg-blue-500'));
+    box.style.display='block'; setTimeout(()=>{box.style.display='none';},3000);
+  }
+  function updateCartCount(){ const el=document.getElementById('cart-count'); if(el) el.textContent=Object.keys(cart).length; }
+
+  function normalizeDateString(input){
+    if(!input) return null; if(typeof input!=='string') input=String(input);
+    const m=input.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[T\s].*)?$/);
+    if(m) return `${m[1]}-${pad2(m[2])}-${pad2(m[3])}`;
+    const n=Number(input);
+    if(!Number.isNaN(n)&&n>20000&&n<60000){
+      const epoch=new Date(Date.UTC(1899,11,30)); const d=new Date(epoch.getTime()+n*86400000);
+      return d2str(new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate())));
+    }
+    const t=Date.parse(input); if(!Number.isNaN(t)){ const d=new Date(t); return d2str(d); }
+    return null;
+  }
+  function toEpochDay(ymd){
+    if(!ymd) return null;
+    const [y,m,d]=ymd.split('-').map(x=>parseInt(x,10));
+    return Date.UTC(y,m-1,d)/86400000;
+  }
+  function groupDatesIntoRanges(dates){
+    if(!dates||dates.length===0) return [];
+    const arr=dates.map(normalizeDateString).filter(Boolean).sort();
+    const res=[]; let start=arr[0], prev=arr[0];
+    const next=(s)=>{ const [y,m,d]=s.split('-').map(n=>parseInt(n,10)); const dt=new Date(Date.UTC(y,m-1,d)+86400000); return d2str(new Date(Date.UTC(dt.getUTCFullYear(),dt.getUTCMonth(),dt.getUTCDate()))); };
+    for(let i=1;i<arr.length;i++){ if(arr[i]!==next(prev)){res.push({start,end:prev}); start=arr[i];} prev=arr[i]; }
+    res.push({start,end:prev}); return res;
+  }
+  function overlaps(aStart,aEnd,bStart,bEnd){
+    const as=toEpochDay(aStart), ae=toEpochDay(aEnd), bs=toEpochDay(bStart), be=toEpochDay(bEnd);
+    if(as==null||ae==null||bs==null||be==null) return false;
+    return !(ae<bs || be<as);
+  }
+  function saveStatusMonth(d){ localStorage.setItem('status_month', `${d.getFullYear()}-${pad2(d.getMonth()+1)}`); }
+  function loadStatusMonth(){
+    const s=localStorage.getItem('status_month'); if(!s) return null;
+    const m=s.match(/^(\d{4})-(\d{2})$/); if(!m) return null;
+    return new Date(parseInt(m[1]), parseInt(m[2])-1, 1);
+  }
+
+  function calculateAge(dateString){
+    if(!dateString) return null;
+    const bd=new Date(dateString), today=new Date();
+    let age=today.getFullYear()-bd.getFullYear();
+    const mm=today.getMonth()-bd.getMonth();
+    if(mm<0 || (mm===0 && today.getDate()<bd.getDate())) age--;
+    return age;
+  }
+
+  function switchView(viewId){
+    document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+    document.getElementById(viewId)?.classList.add('active');
+    document.querySelectorAll('.nav-btn').forEach(b=>{
+      b.classList.remove('text-blue-600','border-b-2','border-blue-600');
+      if(b.id.includes(viewId.split('-')[0])) b.classList.add('text-blue-600','border-b-2','border-blue-600');
+    });
+  }
+  function updateSelectedPeriodDisplay(){
+    const el=document.getElementById('selected-period-display'); if(!el) return;
+    if(selectedDates.length===0) el.textContent='カレンダーから日付を選択してください';
+    else if(selectedDates.length===1) el.textContent=`選択中の日付: ${selectedDates[0]}`;
+    else el.textContent=`選択中の期間: ${selectedDates[0]} ~ ${selectedDates[selectedDates.length-1]} (${selectedDates.length}日間)`;
+  }
+
+  // ========= Auth =========
+  function gapiLoaded(){ gapi.load('client', initializeGapiClient); }
+  async function initializeGapiClient(){ await gapi.client.init({ apiKey: API_KEY, discoveryDocs: DISCOVERY_DOCS }); gapiInited=true; maybeCheckTokenAndLoad(); }
+  function gisLoaded(){
+    tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: CLIENT_ID, scope: SCOPES,
+      callback: (tokenResponse)=>{ if(tokenResponse.error) throw tokenResponse; localStorage.setItem('gapi_token', JSON.stringify(tokenResponse)); updateUI(true); },
+    });
+    gisInited=true; maybeCheckTokenAndLoad();
+  }
+  function maybeCheckTokenAndLoad(){
+    if(gapiInited && gisInited){
+      const stored=localStorage.getItem('gapi_token');
+      if(stored){ gapi.client.setToken(JSON.parse(stored)); updateUI(true); }
+      else { updateUI(false); showLoader(false); }
+    }
+  }
+  async function updateUI(isAuthorized){
+    const auth=document.getElementById('authorize_button'), out=document.getElementById('signout_button');
+    if(auth) auth.style.display = isAuthorized ? 'none' : 'block';
+    if(out) out.style.display = isAuthorized ? 'block' : 'none';
+
+    if(isAuthorized){
+      try{ await getUserProfile(); await loadAllData(); switchView('casting-view'); }
+      catch(err){ console.error('Auth/Data failed',err); handleSignoutClick(); }
+    }else{
+      currentUser=null; isAdmin=false;
+      document.getElementById('user-name')?.classList.add('hidden');
+      showMessage('サインインして、キャスト管理を始めましょう。','info');
+      showLoader(false);
+    }
+  }
+  function handleAuthClick(){ tokenClient?.requestAccessToken({ prompt:'consent' }); }
+  function handleSignoutClick(){
+    const token=gapi.client.getToken();
+    if(token!==null){ google.accounts.oauth2.revoke(token.access_token, ()=>{}); gapi.client.setToken(''); }
+    localStorage.removeItem('gapi_token');
+    updateUI(false); showMessage('サインアウトしました','info');
+  }
+  async function getUserProfile(){
+    const res=await gapi.client.oauth2.userinfo.get(); currentUser=res.result;
+    const el=document.getElementById('user-name'); if(el){ el.textContent=`ようこそ ${currentUser.name} さん`; el.classList.remove('hidden'); }
+  }
+
+  // ========= Data =========
+  async function loadAllData(){
+    showLoader(true);
+    try{
+      const res=await gapi.client.sheets.spreadsheets.values.batchGet({
+        spreadsheetId: SPREADSHEET_ID,
+        ranges: ['キャストリスト!A2:I', 'キャスティングリスト!A2:H', '権限管理リスト!A2:B'],
+      });
+      const vr=res.result.valueRanges;
+      if(!vr || vr.length<3) throw new Error('必要なシートが見つかりません。');
+
+      // Casts
+      const castValues=vr[0].values||[];
+      castData = castValues
+        .filter(r => r && (r[1]?.trim() || r[0]?.trim()))
+        .map((row, idx)=> {
+          const id=row[0]?.trim() || `cast_${idx+1}`;
+          const name=row[1]?.trim() || `未登録キャスト${idx+1}`;
+          const gender=row[2]?.trim() || '';
+          const dob=row[3]?.trim() || '';
+          const agency=row[4]?.trim() || 'フリー';
+          const imageUrl=row[5]?.trim() || '';
+          const appearance=Number.parseInt(row[6],10);
+          const email=row[7]?.trim() || '';
+          const notes=row[8]?.trim() || '';
+          return {
+            castId:id, name, gender, dateOfBirth:dob, age: dob?calculateAge(dob):null,
+            agency, imageUrl, appearanceCount: Number.isFinite(appearance)?appearance:0, email, notes
+          };
+        });
+
+      // Casting
+      const castingValues=vr[1].values||[];
+      castingData = castingValues.map(row=>{
+        const start=normalizeDateString(row?.[4]||'');
+        const end=normalizeDateString(row?.[5]||'');
+        return {
+          castingId: row?.[0] || '',
+          projectName: row?.[1] || '',
+          castId: row?.[2] || '',
+          roleName: row?.[3] || '',
+          startDate: start, endDate: end,
+          startDay: toEpochDay(start), endDay: toEpochDay(end),
+          status: row?.[6] || '',
+          bookedBy: row?.[7] || '',
+        };
+      });
+
+      // Roles (A:email, B:role[admin/viewer])
+      const perm=vr[2].values||[];
+      const roleByEmail=new Map();
+      for(const row of (perm||[])){
+        const email=(row?.[0]||'').trim().toLowerCase();
+        const role=(row?.[1]||'').trim().toLowerCase()||'viewer';
+        if(email) roleByEmail.set(email, role);
+      }
+      const myEmail=(currentUser?.email||'').toLowerCase();
+      isAdmin = (roleByEmail.get(myEmail) === 'admin');
+
+      renderCalendar();
+      renderFilters();
+      displayAvailableCasts();
+    }catch(err){
+      console.error('Data loading error:', err);
+      showMessage('データの取得に失敗しました','error');
+      throw err;
+    }finally{ showLoader(false); }
+  }
+
+  // シート「キャスティングリスト」から最新を再取得
+  async function fetchCastingDataFromSheet() {
+    const getRes = await gapi.client.sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'キャスティングリスト!A2:H'
+    });
+    const rows = getRes.result.values || [];
+    castingData = rows.map(r => {
+      const start = normalizeDateString(r?.[4] || '');
+      const end   = normalizeDateString(r?.[5] || '');
+      return {
+        castingId:  r?.[0] || '',
+        projectName:r?.[1] || '',
+        castId:     r?.[2] || '',
+        roleName:   r?.[3] || '',
+        startDate:  start,
+        endDate:    end,
+        startDay:   toEpochDay(start),
+        endDay:     toEpochDay(end),
+        status:     r?.[6] || '',
+        bookedBy:   r?.[7] || '',
+      };
+    });
+  }
+
+  // ========= Casting view =========
+  function getCastStatusForDates(castId, dates){
+    if(!dates||dates.length===0) return {isProvisional:false, isConfirmed:false};
+    const target = dates.map(normalizeDateString).map(toEpochDay).filter(v=>v!=null);
+    let isProv=false, isConf=false;
+    const bookings = castingData.filter(c=>c.castId===castId && c.startDay!=null && c.endDay!=null);
+    for(const day of target){
+      for(const b of bookings){
+        if(day>=b.startDay && day<=b.endDay){
+          if(b.status==='決定') isConf=true;
+          else if(b.status==='仮キャスティング') isProv=true;
+          if(isConf) return {isProvisional:isProv, isConfirmed:true};
+        }
+      }
+    }
+    return {isProvisional:isProv, isConfirmed:isConf};
+  }
+
+  function displayAvailableCasts(){
+    const list=document.getElementById('cast-list'); if(!list) return;
+    list.innerHTML='';
+    if(selectedDates.length===0){
+      list.innerHTML = `<p class="col-span-full text-center text-gray-500 pt-10">日付を選択すると、キャストが表示されます。</p>`;
+      return;
+    }
+
+    const filtered=getFilteredCasts();
+    if(filtered.length===0){
+      list.innerHTML = `<p class="col-span-full text-center text-gray-500 pt-10">条件に合うキャストがいません。</p>`;
+      return;
+    }
+
+    filtered.forEach(cast=>{
+      const stat=getCastStatusForDates(cast.castId, selectedDates);
+      const inCart=!!cart[cast.castId];
+
+      let badge='', solid=false;
+      if(stat.isConfirmed){ solid=true; badge=`<span class="absolute top-2 right-2 bg-red-500 text-white text-xs font-semibold px-2 py-1 rounded-full">決定</span>`; }
+      else if(stat.isProvisional){ badge=`<span class="absolute top-2 right-2 bg-yellow-400 text-yellow-800 text-xs font-semibold px-2 py-1 rounded-full">仮キャスティング中</span>`; }
+
+      const disabled = solid || inCart;
+      const buttonLabel = solid ? 'キャスティング不可' : (inCart ? '仮キャスティング（追加済）' : '仮キャスティング');
+
+      const meta=[]; if(cast.gender) meta.push(cast.gender); if(Number.isFinite(cast.age)) meta.push(`${cast.age}歳`); meta.push(`出演: ${cast.appearanceCount}回`);
+
+      const card=document.createElement('div');
+      card.className=`bg-white rounded-lg shadow-md overflow-hidden flex flex-col relative ${(solid||inCart)?'opacity-50':''}`;
+      card.innerHTML = `
+        ${cast.imageUrl ? `<img src="${cast.imageUrl}" alt="${cast.name}" class="w-full h-48 object-cover">`
+                         : `<div class="w-full h-48 bg-gray-300 flex items-center justify-center">
+                              <svg class="w-12 h-12 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+                            </div>`}
+        ${badge}
+        <div class="p-4 flex-grow flex flex-col">
+          <h3 class="text-lg font-bold">${cast.name}</h3>
+          <p class="text-sm text-gray-600">${(cast.agency?.trim()) || 'フリー'}</p>
+          <div class="mt-2 text-xs text-gray-500">${meta.join(' / ')}</div>
+        </div>
+        <div class="p-4 pt-0 mt-auto">
+          <button data-cast-id="${cast.castId}" class="add-to-cart-btn w-full ${disabled?'bg-gray-400 cursor-not-allowed':'bg-blue-500 hover:bg-blue-600'} text-white font-bold py-2 px-4 rounded-lg transition" ${disabled?'disabled':''}>${buttonLabel}</button>
+          ${(!solid && stat.isProvisional)?'<p class="mt-2 text-xs text-amber-700">※仮キャスティングが入っています。</p>':''}
+        </div>`;
+      list.appendChild(card);
+    });
+  }
+
+  function getFilteredCasts(){
+    const kw=document.getElementById('filter-keyword')?.value?.trim()?.toLowerCase()||'';
+    const m=document.getElementById('filter-gender-male')?.checked;
+    const f=document.getElementById('filter-gender-female')?.checked;
+    const minApp=parseInt(document.getElementById('filter-appearance')?.value,10)||0;
+    const avail=document.getElementById('filter-available-only')?.checked;
+    const agencies=Array.from(document.querySelectorAll('#agency-filter-dropdown input[type="checkbox"]:checked')).map(el=>el.value);
+
+    const filtered = castData.filter(c=>{
+      if(kw){
+        const hay=`${c.name||''}\n${c.agency||''}\n${c.notes||''}`.toLowerCase();
+        if(!hay.includes(kw)) return false;
+      }
+      if(m||f){
+        if(m && c.gender==='男性'){/* ok */}
+        else if(f && c.gender==='女性'){/* ok */}
+        else return false;
+      }
+      if(agencies.length>0 && !agencies.includes(c.agency||'フリー')) return false;
+      if(c.appearanceCount < minApp) return false;
+      if(avail && selectedDates.length>0){
+        const s=getCastStatusForDates(c.castId, selectedDates);
+        if(s.isProvisional || s.isConfirmed) return false;
+      }
+      return true;
+    });
+
+    const byApp=document.getElementById('sort-appearance')?.checked;
+    const byKana=document.getElementById('sort-kana')?.checked;
+    if(byApp) filtered.sort((a,b)=>(b.appearanceCount??0)-(a.appearanceCount??0));
+    else if(byKana) filtered.sort((a,b)=>(a.name||'').localeCompare(b.name||'','ja',{sensitivity:'base'}));
+    return filtered;
+  }
+
+  // ========= Status view =========
+  // refresh=true: 描画前に必ずシートから再取得
+  async function renderCastingStatusView(refresh = false) {
+    const view = document.getElementById('status-view'); 
+    if (!view) return;
+
+    if (refresh) {
+      try { showLoader(true); await fetchCastingDataFromSheet(); }
+      catch (e) { console.error(e); showMessage('ステータスの再取得に失敗しました','error'); }
+      finally { showLoader(false); }
+    }
+
+    const y = statusMonth.getFullYear(), m = statusMonth.getMonth();
+    const start = new Date(y, m, 1), end = new Date(y, m + 1, 0);
+
+    const header = `
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+          <button id="status-prev-month" class="px-2 py-1 rounded border bg-white">&lt;</button>
+          <div class="font-semibold">${y}年${m+1}月</div>
+          <button id="status-next-month" class="px-2 py-1 rounded border bg-white">&gt;</button>
+        </div>
+        <div class="flex items-center gap-2">
+          <label class="inline-flex items-center gap-2 text-sm">
+            <input id="status-show-past" type="checkbox" ${showPast?'checked':''} />
+            過去を表示
+          </label>
+          <button id="status-reload" class="px-2 py-1 rounded border bg-white text-sm">再読込</button>
+        </div>
+      </div>`;
+
+    const byDate = new Map();
+    for (const c of castingData) {
+      if (!c.startDate || !c.endDate) continue;
+      const from = new Date(`${c.startDate}T00:00:00`);
+      const to   = new Date(`${c.endDate}T00:00:00`);
+      let d = new Date(Math.max(from, start));
+      const last = new Date(Math.min(to, end));
+      while (d <= last) {
+        const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+        if (!showPast) {
+          const ep = toEpochDay(key);
+          if (ep < TODAY_EPOCH) { d.setDate(d.getDate()+1); continue; }
+        }
+        if (!byDate.has(key)) byDate.set(key, []);
+        byDate.get(key).push(c);
+        d.setDate(d.getDate()+1);
+      }
+    }
+
+    const days = Array.from(byDate.keys()).sort();
+    let html = header;
+    if (days.length === 0) {
+      html += `<p class="text-gray-600">該当の登録はありません。</p>`;
+    } else {
+      html += days.map(day => {
+        const items = byDate.get(day);
+        const rows = items.map(it => {
+          const cast = castData.find(c => c.castId === it.castId);
+          const name = cast?.name || it.castId;
+          const badgeClass =
+            it.status === '決定'     ? 'bg-red-100 text-red-700' :
+            it.status === 'キャンセル' ? 'bg-gray-200 text-gray-700' :
+            it.status === '打診中'   ? 'bg-blue-100 text-blue-700' :
+                                       'bg-yellow-100 text-yellow-800'; // 仮
+          const ops = [];
+          if (isAdmin) {
+            ops.push(`<button data-edit-casting="${it.castingId}" class="text-xs px-2 py-1 rounded bg-emerald-600 text-white">編集</button>`);
+            if (it.status !== '決定') {
+              ops.push(`<button data-promote-casting="${it.castingId}" class="text-xs px-2 py-1 rounded bg-blue-600 text-white">決定</button>`);
+            }
+          }
+          return `
+            <tr class="border-b">
+              <td class="py-2 px-2">${name}</td>
+              <td class="py-2 px-2">${it.projectName || '-'}</td>
+              <td class="py-2 px-2">${it.roleName || '-'}</td>
+              <td class="py-2 px-2"><span class="inline-block text-xs px-2 py-1 rounded ${badgeClass}">${it.status || '-'}</span></td>
+              <td class="py-2 px-2 text-right">${ops.join(' ')}</td>
+            </tr>`;
+        }).join('');
+        return `
+          <div class="mb-6">
+            <h3 class="font-semibold mb-2">${day}</h3>
+            <div class="overflow-x-auto bg-white rounded-lg shadow">
+              <table class="min-w-full text-sm">
+                <thead class="bg-gray-50">
+                  <tr>
+                    <th class="text-left py-2 px-2">キャスト</th>
+                    <th class="text-left py-2 px-2">作品名</th>
+                    <th class="text-left py-2 px-2">役名</th>
+                    <th class="text-left py-2 px-2">ステータス</th>
+                    <th class="text-right py-2 px-2">操作</th>
+                  </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+              </table>
+            </div>
+          </div>`;
+      }).join('');
+    }
+
+    view.innerHTML = html;
+
+    // UIイベント
+    view.querySelector('#status-prev-month')?.addEventListener('click', async () => {
+      statusMonth.setMonth(statusMonth.getMonth() - 1); saveStatusMonth(statusMonth);
+      await renderCastingStatusView(true);
+    });
+    view.querySelector('#status-next-month')?.addEventListener('click', async () => {
+      statusMonth.setMonth(statusMonth.getMonth() + 1); saveStatusMonth(statusMonth);
+      await renderCastingStatusView(true);
+    });
+    view.querySelector('#status-show-past')?.addEventListener('change', async e => {
+      showPast = !!e.target.checked; await renderCastingStatusView(false);
+    });
+    view.querySelector('#status-reload')?.addEventListener('click', async () => {
+      await renderCastingStatusView(true);
+    });
+
+    if (isAdmin) {
+      view.querySelectorAll('[data-promote-casting]')?.forEach(btn=>{
+        btn.addEventListener('click', async ()=>{
+          const id = btn.getAttribute('data-promote-casting');
+          await changeCastingStatus(id, '決定', { autoCancelConflicts: true });
+          await renderCastingStatusView(true);
+          displayAvailableCasts();
+        });
+      });
+      view.querySelectorAll('[data-edit-casting]')?.forEach(btn=>{
+        btn.addEventListener('click', async ()=>{
+          const id = btn.getAttribute('data-edit-casting');
+          await openEditModal(id);
+        });
+      });
+    }
+  }
+
+  // ==== Admin: status change & edit ====
+  async function changeCastingStatus(castingId, newStatus, opts={autoCancelConflicts:false}){
+    if(!isAdmin){ showMessage('権限がありません。','error'); return; }
+    const rec = castingData.find(c=>c.castingId===castingId);
+    if(!rec){ showMessage('対象が見つかりません。','error'); return; }
+
+    showLoader(true);
+    try{
+      // 行番号探索
+      const getRes=await gapi.client.sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID, range: 'キャスティングリスト!A2:H'
+      });
+      const rows=getRes.result.values||[];
+      let rowIdx=-1;
+      for(let i=0;i<rows.length;i++){ if(rows[i][0]===castingId){ rowIdx=i; break; } }
+      if(rowIdx===-1){ showMessage('対象が見つかりません。','error'); return; }
+      const targetRow=rowIdx+2;
+
+      const updates=[{range:`キャスティングリスト!G${targetRow}`, values:[[newStatus]]}];
+
+      // 「決定」時の自動キャンセル（同一キャストで期間重複 & ステータスが仮/打診）
+      const toCancel=[];
+      if(opts.autoCancelConflicts && newStatus==='決定'){
+        for(let i=0;i<rows.length;i++){
+          const r=rows[i]; if(!r) continue;
+          const otherId=r[0], otherCast=r[2], otherStatus=r[6]||'';
+          const s=normalizeDateString(r[4]), e=normalizeDateString(r[5]);
+          if(otherId===castingId) continue;
+          if(otherCast!==rec.castId) continue;
+          if(!s||!e||!rec.startDate||!rec.endDate) continue;
+          if(overlaps(rec.startDate, rec.endDate, s, e) && (otherStatus==='仮キャスティング' || otherStatus==='打診中')){
+            toCancel.push(i+2); // シート行番号
+          }
+        }
+        for(const rnum of toCancel){
+          updates.push({range:`キャスティングリスト!G${rnum}`, values:[['キャンセル']]});
+        }
+      }
+
+      // 一括更新
+      await gapi.client.sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: SPREADSHEET_ID,
+        resource:{ valueInputOption:'USER_ENTERED', data: updates }
+      });
+
+      // ローカル反映
+      rec.status=newStatus;
+      if(toCancel.length){
+        const idsToCancel=new Set();
+        toCancel.forEach(rnum=>{
+          const idx=rnum-2; // rows idx
+          const id=rows[idx][0];
+          idsToCancel.add(id);
+        });
+        castingData.forEach(c=>{ if(idsToCancel.has(c.castingId)) c.status='キャンセル'; });
+      }
+
+      showMessage('ステータスを更新しました。');
+      await renderCastingStatusView(true);
+    }catch(e){
+      console.error(e); showMessage('更新に失敗しました。','error');
+    }finally{ showLoader(false); }
+  }
+
+  async function openEditModal(castingId){
+    if(!isAdmin){ showMessage('権限がありません。','error'); return; }
+    const rec=castingData.find(c=>c.castingId===castingId);
+    if(!rec){ showMessage('対象が見つかりません。','error'); return; }
+
+    const modal=document.getElementById('edit-modal'); if(!modal) return;
+    modal.innerHTML = `
+      <div class="bg-white rounded-lg shadow-xl max-w-md w-full p-5">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-lg font-bold">キャスティング編集</h3>
+          <button id="edit-close" class="text-gray-600 hover:text-gray-800">&times;</button>
+        </div>
+        <div class="space-y-3">
+          <div>
+            <label class="text-sm text-gray-700">作品名</label>
+            <input id="edit-project" type="text" class="mt-1 w-full p-2 border rounded-md" value="${rec.projectName||''}">
+          </div>
+          <div>
+            <label class="text-sm text-gray-700">役名</label>
+            <input id="edit-role" type="text" class="mt-1 w-full p-2 border rounded-md" value="${rec.roleName||''}">
+          </div>
+          <div>
+            <label class="text-sm text-gray-700">担当者</label>
+            <input id="edit-bookedby" type="text" class="mt-1 w-full p-2 border rounded-md" value="${rec.bookedBy||currentUser?.email||''}">
+          </div>
+          <div>
+            <label class="text-sm text-gray-700">ステータス</label>
+            <select id="edit-status" class="mt-1 w-full p-2 border rounded-md">
+              ${['決定','キャンセル','仮キャスティング','打診中'].map(s=>`<option value="${s}" ${rec.status===s?'selected':''}>${s}</option>`).join('')}
+            </select>
+            <p class="text-xs text-gray-500 mt-1">※「決定」にすると、同じキャストで重複する仮/打診は自動でキャンセルされます。</p>
+          </div>
+        </div>
+        <div class="mt-4 flex justify-end gap-3">
+          <button id="edit-cancel" class="px-4 py-2 rounded-md border border-gray-300">閉じる</button>
+          <button id="edit-save" class="px-4 py-2 rounded-md bg-blue-600 text-white font-semibold">保存</button>
+        </div>
+      </div>`;
+    modal.classList.remove('hidden');
+
+    modal.querySelector('#edit-close')?.addEventListener('click', closeEditModal);
+    modal.querySelector('#edit-cancel')?.addEventListener('click', closeEditModal);
+    modal.querySelector('#edit-save')?.addEventListener('click', async ()=>{
+      await saveEdit(castingId);
+    });
+  }
+  function closeEditModal(){ const modal=document.getElementById('edit-modal'); if(!modal) return; modal.classList.add('hidden'); modal.innerHTML=''; }
+
+  async function saveEdit(castingId){
+    if(!isAdmin){ showMessage('権限がありません。','error'); return; }
+    const rec=castingData.find(c=>c.castingId===castingId); if(!rec){ showMessage('対象が見つかりません。','error'); return; }
+
+    const modal=document.getElementById('edit-modal');
+    const newProject=modal.querySelector('#edit-project')?.value?.trim()||'';
+    const newRole=modal.querySelector('#edit-role')?.value?.trim()||'';
+    const newBooked=modal.querySelector('#edit-bookedby')?.value?.trim()||'';
+    const newStatus=modal.querySelector('#edit-status')?.value||rec.status;
+
+    showLoader(true);
+    try{
+      // 行番号探索
+      const getRes=await gapi.client.sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID, range:'キャスティングリスト!A2:H'
+      });
+      const rows=getRes.result.values||[];
+      let rowIdx=-1; for(let i=0;i<rows.length;i++){ if(rows[i][0]===castingId){ rowIdx=i; break; } }
+      if(rowIdx===-1){ showMessage('対象が見つかりません。','error'); return; }
+      const targetRow=rowIdx+2;
+
+      const updates=[
+        {range:`キャスティングリスト!B${targetRow}`, values:[[newProject]]},
+        {range:`キャスティングリスト!D${targetRow}`, values:[[newRole]]},
+        {range:`キャスティングリスト!H${targetRow}`, values:[[newBooked]]},
+        {range:`キャスティングリスト!G${targetRow}`, values:[[newStatus]]},
+      ];
+
+      // 新ステータスが「決定」の場合、重複仮/打診をキャンセル
+      const toCancel=[];
+      if(newStatus==='決定'){
+        for(let i=0;i<rows.length;i++){
+          const r=rows[i]; if(!r) continue;
+          const otherId=r[0], otherCast=r[2], otherStatus=r[6]||'';
+          const s=normalizeDateString(r[4]), e=normalizeDateString(r[5]);
+          if(otherId===castingId) continue;
+          if(otherCast!==rec.castId) continue;
+          if(!s||!e||!rec.startDate||!rec.endDate) continue;
+          if(overlaps(rec.startDate, rec.endDate, s, e) && (otherStatus==='仮キャスティング' || otherStatus==='打診中')){
+            updates.push({range:`キャスティングリスト!G${i+2}`, values:[['キャンセル']]});
+            toCancel.push(i);
+          }
+        }
+      }
+
+      await gapi.client.sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: SPREADSHEET_ID,
+        resource:{ valueInputOption:'USER_ENTERED', data: updates }
+      });
+
+      // ローカル反映
+      rec.projectName=newProject; rec.roleName=newRole; rec.bookedBy=newBooked; rec.status=newStatus;
+      if(toCancel.length){
+        const ids=new Set(toCancel.map(i=>rows[i][0]));
+        castingData.forEach(c=>{ if(ids.has(c.castingId)) c.status='キャンセル'; });
+      }
+
+      closeEditModal();
+      showMessage('更新しました。');
+      await renderCastingStatusView(true);
+      displayAvailableCasts();
+    }catch(e){
+      console.error(e); showMessage('更新に失敗しました。','error');
+    }finally{ showLoader(false); }
+  }
+
+  // ========= Calendar (today red) =========
+  function renderCalendar(){
+    const monthYearEl=document.getElementById('current-month-year');
+    const grid=document.getElementById('calendar-grid');
+    if(!monthYearEl || !grid) return;
+
+    // header
+    monthYearEl.textContent=`${calendarDate.getFullYear()}年${calendarDate.getMonth()+1}月`;
+
+    // clear & rebuild
+    grid.innerHTML='';
+    const frag=document.createDocumentFragment();
+
+    // weekday header
+    ['日','月','火','水','木','金','土'].forEach(d=>{
+      const h=document.createElement('div');
+      h.textContent=d; h.className='font-bold text-gray-600';
+      frag.appendChild(h);
+    });
+
+    const y=calendarDate.getFullYear(), m=calendarDate.getMonth();
+    const first=new Date(y,m,1), last=new Date(y,m+1,0);
+
+    // leading blanks
+    for(let i=0;i<first.getDay();i++){
+      const blank=document.createElement('div'); blank.className='p-2';
+      frag.appendChild(blank);
+    }
+
+    // days
+    for(let day=1; day<=last.getDate(); day++){
+      const d=new Date(y,m,day);
+      const ymd=d2str(d);
+      const cell=document.createElement('div');
+      const isToday = (ymd===TODAY_STR);
+      const isSelected = selectedDates.includes(ymd);
+
+      cell.className = 'p-2 rounded-md cursor-pointer hover:bg-blue-200 calendar-day';
+      if(isSelected){ cell.classList.add('bg-blue-500','text-white'); }
+      else if(isToday){ cell.classList.add('text-red-600','font-semibold'); } // 今日＝赤文字
+
+      cell.dataset.date=ymd;
+      cell.textContent=String(day);
+      frag.appendChild(cell);
+    }
+
+    grid.appendChild(frag);
+  }
+
+  // ========= Filters =========
+  function renderFilters(){
+    const container=document.getElementById('filters-container'); if(!container) return;
+    container.innerHTML=`
+      <!-- キーワード -->
+      <div>
+        <label for="filter-keyword" class="block text-sm font-medium text-gray-700">キーワード</label>
+        <input id="filter-keyword" type="text" placeholder="名前・事務所・メモ" class="mt-1 block w-full p-2 border rounded-md">
+      </div>
+      <!-- 性別 -->
+      <div>
+        <span class="block text-sm font-medium text-gray-700 mb-1">性別</span>
+        <div class="flex items-center space-x-4">
+          <label class="inline-flex items-center space-x-2">
+            <input id="filter-gender-male" type="checkbox" class="h-4 w-4 text-blue-600 border-gray-300 rounded">
+            <span class="text-sm">男性</span>
+          </label>
+          <label class="inline-flex items-center space-x-2">
+            <input id="filter-gender-female" type="checkbox" class="h-4 w-4 text-blue-600 border-gray-300 rounded">
+            <span class="text-sm">女性</span>
+          </label>
+        </div>
+      </div>
+      <!-- 並び替え（排他） -->
+      <div>
+        <span class="block text-sm font-medium text-gray-700 mb-1">並び替え</span>
+        <div class="space-y-2">
+          <label class="inline-flex items-center space-x-2">
+            <input id="sort-appearance" type="checkbox" class="h-4 w-4 text-blue-600 border-gray-300 rounded">
+            <span class="text-sm">出演回数順</span>
+          </label>
+          <label class="inline-flex items-center space-x-2">
+            <input id="sort-kana" type="checkbox" class="h-4 w-4 text-blue-600 border-gray-300 rounded">
+            <span class="text-sm">50音順</span>
+          </label>
+        </div>
+      </div>
+      <!-- 仮キャスなし -->
+      <div class="flex items-center">
+        <input id="filter-available-only" type="checkbox" class="h-4 w-4 text-blue-600 border-gray-300 rounded">
+        <label for="filter-available-only" class="ml-2 block text-sm text-gray-900">仮キャスティングされていない</label>
+      </div>
+      <!-- 所属事務所 -->
+      <div class="relative">
+        <label class="block text-sm font-medium text-gray-700">所属事務所</label>
+        <button id="agency-filter-btn" class="mt-1 w-full p-2 border rounded-md text-left bg-white flex justify-between items-center">
+          <span>選択...</span>
+          <svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+        </button>
+        <div id="agency-filter-dropdown" class="hidden absolute w-full mt-1 bg-white border rounded-md shadow-lg z-10 max-h-60 overflow-y-auto"></div>
+      </div>
+      <!-- 出演回数 -->
+      <div>
+        <label for="filter-appearance" class="block text-sm font-medium text-gray-700">出演回数 (以上)</label>
+        <input type="number" id="filter-appearance" min="0" value="0" class="mt-1 block w-full p-2 border rounded-md">
+      </div>
+    `;
+    renderAgencyFilter();
+
+    // dropdown
+    const btn=document.getElementById('agency-filter-btn');
+    const dd=document.getElementById('agency-filter-dropdown');
+    btn?.addEventListener('click', e=>{ e.stopPropagation(); dd?.classList.toggle('hidden'); });
+    document.addEventListener('click', e=>{ if(!dd || dd.classList.contains('hidden')) return; if(!dd.contains(e.target) && e.target!==btn) dd.classList.add('hidden'); });
+
+    // sort exclusive
+    const sA=document.getElementById('sort-appearance');
+    const sK=document.getElementById('sort-kana');
+    sA?.addEventListener('change', ()=>{ if(sA.checked) sK.checked=false; displayAvailableCasts(); });
+    sK?.addEventListener('change', ()=>{ if(sK.checked) sA.checked=false; displayAvailableCasts(); });
+  }
+  function renderAgencyFilter(){
+    const dd=document.getElementById('agency-filter-dropdown'); if(!dd) return;
+    const agencies=[...new Set(castData.map(c=>c.agency?.trim()||'フリー'))].sort((a,b)=>a.localeCompare(b,'ja'));
+    dd.innerHTML = agencies.map(ag=>`
+      <div class="p-2 hover:bg-gray-100 cursor-pointer">
+        <label class="flex items-center space-x-3 w-full">
+          <input type="checkbox" class="agency-checkbox h-4 w-4 text-blue-600 border-gray-300 rounded" value="${ag}">
+          <span class="text-sm">${ag}</span>
+        </label>
+      </div>`).join('');
+  }
+
+  // ========= Cart =========
+  function addToCart(castId){
+    if(!castId) return;
+    if(selectedDates.length===0){ showMessage('まず日付を選択してください。','info'); return; }
+    const cast=castData.find(c=>c.castId===castId); if(!cast) return;
+    cart[castId]={ cast, dates:[...selectedDates], roleName: cart[castId]?.roleName||'' };
+    updateCartCount(); showMessage(`${cast.name} をカートに追加しました（${selectedDates.length}日）。`);
+    displayAvailableCasts();
+  }
+  async function confirmProvisionalBookings(){
+    const items=Object.values(cart); if(items.length===0){ showMessage('カートが空です。','info'); return; }
+    const modal=document.getElementById('cart-modal');
+    const project=modal?.querySelector('#cart-project-name')?.value?.trim()||'';
+    const booked=modal?.querySelector('#cart-booked-by')?.value?.trim()||(currentUser?.email||'');
+    if(!project){ showMessage('作品名を入力してください。','error'); return; }
+    if(!booked){ showMessage('仮キャスティングをかける人を入力してください。','error'); return; }
+
+    showLoader(true);
+    try{
+      const values=[]; const prefix=`pc_${Date.now()}`; let seq=1;
+      for(const it of items){
+        const ranges=groupDatesIntoRanges(it.dates);
+        for(const rg of ranges){
+          values.push([`${prefix}_${seq++}`, project, it.cast.castId, it.roleName||'', rg.start, rg.end, '仮キャスティング', booked]);
+        }
+      }
+      if(values.length===0){ showMessage('追加対象の日付がありません。','info'); return; }
+
+      await gapi.client.sheets.spreadsheets.values.append({
+        spreadsheetId: SPREADSHEET_ID, range:'キャスティングリスト!A2',
+        valueInputOption:'USER_ENTERED', insertDataOption:'INSERT_ROWS',
+        resource:{ values }
+      });
+
+      values.forEach(r=>{
+        const s=normalizeDateString(r[4]), e=normalizeDateString(r[5]);
+        castingData.push({ castingId:r[0], projectName:r[1], castId:r[2], roleName:r[3], startDate:s, endDate:e, startDay:toEpochDay(s), endDay:toEpochDay(e), status:r[6], bookedBy:r[7] });
+      });
+
+      cart={}; updateCartCount(); closeCartModal(); displayAvailableCasts();
+      await renderCastingStatusView(true);
+      showMessage('仮キャスティングを登録しました。');
+    }catch(e){ console.error(e); showMessage('仮キャスティングの登録に失敗しました。','error'); }
+    finally{ showLoader(false); }
+  }
+  function renderCartModal(){
+    const modal=document.getElementById('cart-modal'); if(!modal) return;
+    const items=Object.values(cart);
+    const body = items.length ? items.map(it=>{
+      const dates=it.dates.join('、');
+      return `
+        <div class="flex items-start justify-between py-3 border-b">
+          <div class="w-full pr-4">
+            <div class="font-semibold">${it.cast.name}</div>
+            <div class="text-xs text-gray-600">${(it.cast.agency?.trim())||'フリー'}</div>
+            <div class="text-xs mt-1">日付：${dates}</div>
+            <div class="mt-2">
+              <label class="text-xs text-gray-700">役名</label>
+              <input data-role-for="${it.cast.castId}" type="text" value="${it.roleName||''}" class="mt-1 w-full p-2 border rounded-md text-sm" placeholder="例：主演・A役など">
+            </div>
+          </div>
+          <button data-remove-id="${it.cast.castId}" class="text-sm text-red-600 hover:underline whitespace-nowrap">削除</button>
+        </div>`;
+    }).join('') : '<p class="text-sm text-gray-600">カートは空です。</p>';
+
+    modal.innerHTML = `
+      <div class="bg-white rounded-lg shadow-xl max-w-xl w-full p-5">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-lg font-bold">仮キャスティング（カート）</h3>
+          <button id="cart-close" class="text-gray-600 hover:text-gray-800">&times;</button>
+        </div>
+        <div class="grid grid-cols-1 gap-3 mb-3">
+          <div>
+            <label class="text-sm text-gray-700">作品名</label>
+            <input id="cart-project-name" type="text" class="mt-1 w-full p-2 border rounded-md" placeholder="作品名を入力">
+          </div>
+          <div>
+            <label class="text-sm text-gray-700">仮キャスティングをかける人</label>
+            <input id="cart-booked-by" type="text" class="mt-1 w-full p-2 border rounded-md" placeholder="氏名/メール等" value="${currentUser?.name||currentUser?.email||''}">
+          </div>
+        </div>
+        <div class="max-h-[50vh] overflow-y-auto">${body}</div>
+        <div class="mt-4 flex justify-end gap-3">
+          <button id="cart-cancel" class="px-4 py-2 rounded-md border border-gray-300">閉じる</button>
+          <button id="cart-confirm" class="px-4 py-2 rounded-md bg-blue-600 text-white font-semibold">仮キャスティングを確定</button>
+        </div>
+      </div>`;
+    modal.classList.remove('hidden');
+
+    modal.querySelector('#cart-close')?.addEventListener('click', closeCartModal);
+    modal.querySelector('#cart-cancel')?.addEventListener('click', closeCartModal);
+    modal.querySelector('#cart-confirm')?.addEventListener('click', confirmProvisionalBookings);
+    modal.querySelectorAll('[data-remove-id]')?.forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const id=btn.getAttribute('data-remove-id'); delete cart[id]; updateCartCount(); renderCartModal();
+      });
+    });
+    modal.querySelectorAll('input[data-role-for]')?.forEach(inp=>{
+      inp.addEventListener('input', ()=>{ const id=inp.getAttribute('data-role-for'); if(cart[id]) cart[id].roleName=inp.value||''; });
+    });
+  }
+  function closeCartModal(){ const modal=document.getElementById('cart-modal'); if(!modal) return; modal.classList.add('hidden'); modal.innerHTML=''; }
+
+  // ========= Events =========
+  document.querySelectorAll('.nav-btn').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      if (btn.id === 'nav-cart') return;
+      const viewId = btn.id.replace('nav-','') + '-view';
+      switchView(viewId);
+      if (viewId === 'status-view') {
+        await renderCastingStatusView(true); // 毎回リロード
+      }
+    });
+  });
+  document.getElementById('nav-cart')?.addEventListener('click', e=>{ e.preventDefault(); renderCartModal(); });
+
+  document.getElementById('authorize_button')?.addEventListener('click', handleAuthClick);
+  document.getElementById('signout_button')?.addEventListener('click', handleSignoutClick);
+
+  document.getElementById('prev-month')?.addEventListener('click', ()=>{ calendarDate.setMonth(calendarDate.getMonth()-1); renderCalendar(); });
+  document.getElementById('next-month')?.addEventListener('click', ()=>{ calendarDate.setMonth(calendarDate.getMonth()+1); renderCalendar(); });
+
+  document.getElementById('calendar-grid')?.addEventListener('click', e=>{
+    const cell=e.target.closest('.calendar-day'); if(!cell?.dataset.date) return;
+    const date=cell.dataset.date;
+    const idx=selectedDates.indexOf(date);
+    if(idx>-1) selectedDates.splice(idx,1); else selectedDates.push(date);
+    selectedDates.sort();
+    renderCalendar(); updateSelectedPeriodDisplay(); displayAvailableCasts();
+  });
+
+  document.body.addEventListener('input', e=>{ if(e.target.closest('#filters-container')) displayAvailableCasts(); });
+
+  document.body.addEventListener('click', e=>{
+    const btn=e.target.closest('.add-to-cart-btn'); if(!btn) return;
+    addToCart(btn.getAttribute('data-cast-id'));
+  });
+
+  // ========= Script load =========
+  const gapiScript=document.createElement('script'); gapiScript.src='https://apis.google.com/js/api.js'; gapiScript.async=true; gapiScript.defer=true; gapiScript.onload=gapiLoaded; document.body.appendChild(gapiScript);
+  const gisScript=document.createElement('script'); gisScript.src='https://accounts.google.com/gsi/client'; gisScript.async=true; gisScript.defer=true; gisScript.onload=gisLoaded; document.body.appendChild(gisScript);
+});
+</script>
+</body>
+</html>
