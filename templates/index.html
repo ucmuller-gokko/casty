@@ -94,6 +94,8 @@
 
 <!-- Cart modal -->
 <div id="cart-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center modal-backdrop"></div>
+<!-- Confirmation modal -->
+<div id="confirmation-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center modal-backdrop"></div>
 <!-- Small edit modal -->
 <div id="edit-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center modal-backdrop"></div>
 
@@ -114,6 +116,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let tokenClient, gapiInited=false, gisInited=false;
   let currentUser=null, isAdmin=false;
   let castData=[], castingData=[], adminUsers=[];
+  let shootingScheduleData = new Map(); // Map<castId, Set<dateString>>
   let cart = {}; // { [castId]: { cast, dates: string[], roleName?: string } }
   let selectedDates=[];
   let calendarDate = new Date();
@@ -140,6 +143,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function normalizeDateString(input){
     if(!input) return null; if(typeof input!=='string') input=String(input);
+
+    // New: Handle MM/DD format
+    const md = input.match(/^(\d{1,2})\/(\d{1,2})$/);
+    if (md) {
+        const year = new Date().getFullYear();
+        return `${year}-${pad2(md[1])}-${pad2(md[2])}`;
+    }
+
     const m=input.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[T\s].*)?$/);
     if(m) return `${m[1]}-${pad2(m[2])}-${pad2(m[3])}`;
     const n=Number(input);
@@ -171,7 +182,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function saveStatusMonth(d){ localStorage.setItem('status_month', `${d.getFullYear()}-${pad2(d.getMonth()+1)}`); }
   function loadStatusMonth(){
     const s=localStorage.getItem('status_month'); if(!s) return null;
-    const m=s.match(/^(\d{4})-(\d{2})$/); if(!m) return null;
+    const m=s.match(/^(\d{4})[-/](\d{2})$/); if(!m) return null;
     return new Date(parseInt(m[1]), parseInt(m[2])-1, 1);
   }
 
@@ -249,7 +260,7 @@ document.addEventListener('DOMContentLoaded', () => {
     try{
       const res=await gapi.client.sheets.spreadsheets.values.batchGet({
         spreadsheetId: SPREADSHEET_ID,
-        ranges: ['キャストリスト!A2:I', 'キャスティングリスト!A2:H', '権限管理リスト!A2:B'],
+        ranges: ['キャストリスト!A2:I', 'キャスティングリスト!A2:J', '権限管理リスト!A2:B', '撮影スケ_キャスト!A2:Z'],
       });
       const vr=res.result.valueRanges;
       if(!vr || vr.length<3) throw new Error('必要なシートが見つかりません。');
@@ -288,6 +299,8 @@ document.addEventListener('DOMContentLoaded', () => {
           startDay: toEpochDay(start), endDay: toEpochDay(end),
           status: row?.[6] || '',
           bookedBy: row?.[7] || '',
+          intimacyScene: row?.[8] || '',
+          childActorCheck: row?.[9] || '',
         };
       });
 
@@ -301,6 +314,37 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       const myEmail=(currentUser?.email||'').toLowerCase();
       isAdmin = (roleByEmail.get(myEmail) === 'admin');
+
+      // Shooting Schedule (from new sheet)
+      if (vr.length > 3 && vr[3].values) {
+        console.log("DEBUG: Raw schedule data from sheet:", JSON.stringify(vr[3].values)); // Log raw data
+        const scheduleValues = vr[3].values || [];
+        const castNameToId = new Map(castData.map(c => [c.name, c.castId]));
+        shootingScheduleData.clear();
+
+        for (const row of scheduleValues) {
+            const castName = row[0]?.trim();
+            if (!castName) continue;
+            const castId = castNameToId.get(castName);
+            if (!castId) {
+                console.warn(`撮影スケジュールに不明なキャスト名が見つかりました: ${castName}`);
+                continue;
+            }
+
+            if (!shootingScheduleData.has(castId)) {
+                shootingScheduleData.set(castId, new Set());
+            }
+            const scheduleSet = shootingScheduleData.get(castId);
+
+            for (let i = 1; i < row.length; i++) {
+                const dateStr = normalizeDateString(row[i]);
+                if (dateStr) scheduleSet.add(dateStr);
+            }
+        }
+        console.log("DEBUG: Processed shootingScheduleData:", shootingScheduleData); // Log processed map
+      } else {
+        console.log("DEBUG: No data found for '撮影スケ_キャスト' sheet or vr.length is not > 3.");
+      }
 
       renderCalendar();
       renderFilters();
@@ -316,7 +360,7 @@ document.addEventListener('DOMContentLoaded', () => {
   async function fetchCastingDataFromSheet() {
     const getRes = await gapi.client.sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'キャスティングリスト!A2:H'
+      range: 'キャスティングリスト!A2:J'
     });
     const rows = getRes.result.values || [];
     castingData = rows.map(r => {
@@ -333,26 +377,49 @@ document.addEventListener('DOMContentLoaded', () => {
         endDay:     toEpochDay(end),
         status:     r?.[6] || '',
         bookedBy:   r?.[7] || '',
+        intimacyScene: r?.[8] || '',
+        childActorCheck: r?.[9] || '',
       };
     });
   }
 
   // ========= Casting view =========
   function getCastStatusForDates(castId, dates){
-    if(!dates||dates.length===0) return {isProvisional:false, isConfirmed:false};
-    const target = dates.map(normalizeDateString).map(toEpochDay).filter(v=>v!=null);
-    let isProv=false, isConf=false;
+    if(!dates||dates.length===0) return {isProvisional:false, isConfirmed:false, isShooting:false};
+    const targetDates = dates.map(normalizeDateString).filter(v=>v!=null);
+    const targetEpochs = targetDates.map(toEpochDay);
+
+    let isProv=false, isConf=false, isShooting=false;
+    
+    // Check existing bookings
     const bookings = castingData.filter(c=>c.castId===castId && c.startDay!=null && c.endDay!=null);
-    for(const day of target){
+    for(const day of targetEpochs){
+      if (isConf) break; // Optimization
       for(const b of bookings){
         if(day>=b.startDay && day<=b.endDay){
-          if(b.status==='決定') isConf=true;
+          if(b.status==='決定') {
+            isConf=true;
+            break;
+          }
           else if(b.status==='仮キャスティング') isProv=true;
-          if(isConf) return {isProvisional:isProv, isConfirmed:true};
         }
       }
     }
-    return {isProvisional:isProv, isConfirmed:isConf};
+
+    // Check shooting schedule if not already confirmed
+    if (!isConf) {
+        const schedule = shootingScheduleData.get(castId);
+        if (schedule) {
+            for (const d of targetDates) {
+                if (schedule.has(d)) {
+                    isShooting = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    return {isProvisional:isProv, isConfirmed:isConf, isShooting:isShooting};
   }
 
   function displayAvailableCasts(){
@@ -371,11 +438,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
     filtered.forEach(cast=>{
       const stat=getCastStatusForDates(cast.castId, selectedDates);
+      console.log(`DEBUG: Status for ${cast.name} (ID: ${cast.castId}):`, stat); // Log status check
       const inCart=!!cart[cast.castId];
 
       let badge='', solid=false;
-      if(stat.isConfirmed){ solid=true; badge=`<span class="absolute top-2 right-2 bg-red-500 text-white text-xs font-semibold px-2 py-1 rounded-full">決定</span>`; }
-      else if(stat.isProvisional){ badge=`<span class="absolute top-2 right-2 bg-yellow-400 text-yellow-800 text-xs font-semibold px-2 py-1 rounded-full">仮キャスティング中</span>`; }
+      if(stat.isConfirmed){ 
+        solid=true; 
+        badge=`<span class="absolute top-2 right-2 bg-red-500 text-white text-xs font-semibold px-2 py-1 rounded-full">決定</span>`; 
+      } else if(stat.isProvisional){ 
+        badge=`<span class="absolute top-2 right-2 bg-yellow-400 text-yellow-800 text-xs font-semibold px-2 py-1 rounded-full">仮キャスティング中</span>`; 
+      } else if (stat.isShooting) {
+        badge=`<span class="absolute top-2 right-2 bg-cyan-400 text-cyan-800 text-xs font-semibold px-2 py-1 rounded-full">撮影あり</span>`;
+      }
 
       const disabled = solid || inCart;
       const buttonLabel = solid ? 'キャスティング不可' : (inCart ? '仮キャスティング（追加済）' : '仮キャスティング');
@@ -397,6 +471,7 @@ document.addEventListener('DOMContentLoaded', () => {
         </div>
         <div class="p-4 pt-0 mt-auto">
           <button data-cast-id="${cast.castId}" class="add-to-cart-btn w-full ${disabled?'bg-gray-400 cursor-not-allowed':'bg-blue-500 hover:bg-blue-600'} text-white font-bold py-2 px-4 rounded-lg transition" ${disabled?'disabled':''}>${buttonLabel}</button>
+          ${(!solid && stat.isShooting)?'<p class="mt-2 text-xs text-cyan-700">※別件の撮影が入っています。</p>':''}
           ${(!solid && stat.isProvisional)?'<p class="mt-2 text-xs text-amber-700">※仮キャスティングが入っています。</p>':''}
         </div>`;
       list.appendChild(card);
@@ -789,13 +864,18 @@ document.addEventListener('DOMContentLoaded', () => {
       const cell=document.createElement('div');
       const isToday = (ymd===TODAY_STR);
       const isSelected = selectedDates.includes(ymd);
-
-      cell.className = 'p-2 rounded-md cursor-pointer hover:bg-blue-200 calendar-day';
-      if(isSelected){ cell.classList.add('bg-blue-500','text-white'); }
-      else if(isToday){ cell.classList.add('text-red-600','font-semibold'); } // 今日＝赤文字
+      const isPast = toEpochDay(ymd) < TODAY_EPOCH;
 
       cell.dataset.date=ymd;
       cell.textContent=String(day);
+
+      if (isPast) {
+        cell.className = 'p-2 rounded-md text-gray-400 cursor-not-allowed';
+      } else {
+        cell.className = 'p-2 rounded-md cursor-pointer hover:bg-blue-200 calendar-day';
+        if(isSelected){ cell.classList.add('bg-blue-500','text-white'); }
+        else if(isToday){ cell.classList.add('text-red-600','font-semibold'); }
+      }
       frag.appendChild(cell);
     }
 
@@ -894,7 +974,8 @@ document.addEventListener('DOMContentLoaded', () => {
     updateCartCount(); showMessage(`${cast.name} をカートに追加しました（${selectedDates.length}日）。`);
     displayAvailableCasts();
   }
-  async function confirmProvisionalBookings(){
+
+  async function confirmProvisionalBookings(confirmationData){
     const items=Object.values(cart); if(items.length===0){ showMessage('カートが空です。','info'); return; }
     const modal=document.getElementById('cart-modal');
     const project=modal?.querySelector('#cart-project-name')?.value?.trim()||'';
@@ -908,7 +989,12 @@ document.addEventListener('DOMContentLoaded', () => {
       for(const it of items){
         const ranges=groupDatesIntoRanges(it.dates);
         for(const rg of ranges){
-          values.push([`${prefix}_${seq++}`, project, it.cast.castId, it.roleName||'', rg.start, rg.end, '仮キャスティング', booked]);
+          values.push([
+            `${prefix}_${seq++}`, project, it.cast.castId, it.roleName||'', 
+            rg.start, rg.end, '仮キャスティング', booked,
+            confirmationData.intimacyScene,
+            confirmationData.childActorCheck ? 'TRUE' : 'FALSE'
+          ]);
         }
       }
       if(values.length===0){ showMessage('追加対象の日付がありません。','info'); return; }
@@ -921,15 +1007,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
       values.forEach(r=>{
         const s=normalizeDateString(r[4]), e=normalizeDateString(r[5]);
-        castingData.push({ castingId:r[0], projectName:r[1], castId:r[2], roleName:r[3], startDate:s, endDate:e, startDay:toEpochDay(s), endDay:toEpochDay(e), status:r[6], bookedBy:r[7] });
+        castingData.push({ 
+            castingId:r[0], projectName:r[1], castId:r[2], roleName:r[3], 
+            startDate:s, endDate:e, startDay:toEpochDay(s), endDay:toEpochDay(e), 
+            status:r[6], bookedBy:r[7],
+            intimacyScene: r[8], childActorCheck: r[9]
+        });
       });
 
-      cart={}; updateCartCount(); closeCartModal(); displayAvailableCasts();
+      cart={}; updateCartCount(); closeCartModal(); closeConfirmationModal(); displayAvailableCasts();
       await renderCastingStatusView(true);
       showMessage('仮キャスティングを登録しました。');
     }catch(e){ console.error(e); showMessage('仮キャスティングの登録に失敗しました。','error'); }
     finally{ showLoader(false); }
   }
+
   function renderCartModal(){
     const modal=document.getElementById('cart-modal'); if(!modal) return;
     const items=Object.values(cart);
@@ -969,14 +1061,14 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="max-h-[50vh] overflow-y-auto">${body}</div>
         <div class="mt-4 flex justify-end gap-3">
           <button id="cart-cancel" class="px-4 py-2 rounded-md border border-gray-300">閉じる</button>
-          <button id="cart-confirm" class="px-4 py-2 rounded-md bg-blue-600 text-white font-semibold">仮キャスティングを確定</button>
+          <button id="cart-confirm" class="px-4 py-2 rounded-md bg-blue-600 text-white font-semibold">確認へ進む</button>
         </div>
       </div>`;
     modal.classList.remove('hidden');
 
     modal.querySelector('#cart-close')?.addEventListener('click', closeCartModal);
     modal.querySelector('#cart-cancel')?.addEventListener('click', closeCartModal);
-    modal.querySelector('#cart-confirm')?.addEventListener('click', confirmProvisionalBookings);
+    modal.querySelector('#cart-confirm')?.addEventListener('click', renderConfirmationModal);
     modal.querySelectorAll('[data-remove-id]')?.forEach(btn=>{
       btn.addEventListener('click', ()=>{
         const id=btn.getAttribute('data-remove-id'); delete cart[id]; updateCartCount(); renderCartModal();
@@ -987,6 +1079,68 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
   function closeCartModal(){ const modal=document.getElementById('cart-modal'); if(!modal) return; modal.classList.add('hidden'); modal.innerHTML=''; }
+
+  function renderConfirmationModal() {
+    const modal = document.getElementById('confirmation-modal');
+    if (!modal) return;
+
+    const cartModal = document.getElementById('cart-modal');
+    const project = cartModal?.querySelector('#cart-project-name')?.value?.trim() || '';
+    const booked = cartModal?.querySelector('#cart-booked-by')?.value?.trim() || (currentUser?.email || '');
+
+    if (!project) { showMessage('作品名を入力してください。', 'error'); return; }
+    if (!booked) { showMessage('仮キャスティングをかける人を入力してください。', 'error'); return; }
+
+    modal.innerHTML = `
+      <div class="bg-white rounded-lg shadow-xl max-w-lg w-full p-6">
+        <h3 class="text-xl font-bold mb-4">最終確認</h3>
+        <div class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700">インティマシーシーンの有無</label>
+            <div class="mt-2 flex space-x-4">
+              <label class="inline-flex items-center"><input type="radio" name="intimacy" value="あり" class="form-radio"> <span class="ml-2">あり</span></label>
+              <label class="inline-flex items-center"><input type="radio" name="intimacy" value="なし" class="form-radio" checked> <span class="ml-2">なし</span></label>
+              <label class="inline-flex items-center"><input type="radio" name="intimacy" value="未定" class="form-radio"> <span class="ml-2">未定</span></label>
+            </div>
+          </div>
+          <div>
+            <label class="flex items-start">
+              <input id="child-actor-check" type="checkbox" class="h-5 w-5 text-blue-600 border-gray-300 rounded mt-1">
+              <span class="ml-3 text-sm text-gray-700">子役（15歳未満）が含まれる場合、法定労働時間や休憩、深夜労働の制限など、関連法規を遵守した撮影計画であることを確認しました。</span>
+            </label>
+          </div>
+        </div>
+        <div class="mt-6 flex justify-end gap-3">
+          <button id="confirm-cancel" class="px-4 py-2 rounded-md border border-gray-300">キャンセル</button>
+          <button id="confirm-final" class="px-4 py-2 rounded-md bg-blue-600 text-white font-semibold">同意して確定</button>
+        </div>
+      </div>
+    `;
+    modal.classList.remove('hidden');
+
+    modal.querySelector('#confirm-cancel').addEventListener('click', closeConfirmationModal);
+    modal.querySelector('#confirm-final').addEventListener('click', () => {
+        const intimacyValue = modal.querySelector('input[name="intimacy"]:checked').value;
+        const childActorConfirmed = modal.querySelector('#child-actor-check').checked;
+        
+        const hasChildActor = Object.values(cart).some(item => item.cast.age !== null && item.cast.age < 15);
+
+        if (hasChildActor && !childActorConfirmed) {
+            showMessage('子役が含まれています。稼働時間に関する規定の確認にチェックを入れてください。', 'error');
+            return;
+        }
+
+        confirmProvisionalBookings({ intimacyScene: intimacyValue, childActorCheck: childActorConfirmed });
+    });
+  }
+
+  function closeConfirmationModal() {
+    const modal = document.getElementById('confirmation-modal');
+    if (modal) {
+        modal.classList.add('hidden');
+        modal.innerHTML = '';
+    }
+  }
 
   // ========= Events =========
   document.querySelectorAll('.nav-btn').forEach(btn=>{
