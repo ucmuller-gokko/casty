@@ -2,3 +2,8 @@ fastapi==0.115.0
 uvicorn[standard]==0.30.6
 python-dotenv==1.0.1
 jinja2==3.1.4
+slack_sdk==3.30.0
+pydantic==2.8.2
+aiohttp==3.9.5
+gspread-asyncio==2.0.0
+python-multipart==0.0.20
