@@ -341,7 +341,12 @@
 
             switchView('casting-view');
           }
-          catch (err) { console.error('Auth/Data failed', err); handleSignoutClick(); }
+          catch (err) {
+            console.error('Auth/Data failed', err);
+            const msg = err.result?.error?.message || err.message || JSON.stringify(err);
+            alert(`データ読み込みに失敗しました。\nエラー: ${msg}\n\nOKを押すとサインアウトします。`);
+            handleSignoutClick();
+          }
         } else {
           currentUser = null; isAdmin = false;
           document.getElementById('user-name')?.classList.add('hidden');
