@@ -1,17 +1,4 @@
-import os
-import json
-from dotenv import load_dotenv
-from fastapi import FastAPI, Request, HTTPException, File, UploadFile, Form, BackgroundTasks
-from fastapi.responses import HTMLResponse, Response, JSONResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
-from typing import List, Optional, Literal
-from slack_sdk.web.async_client import AsyncWebClient
-from slack_sdk.errors import SlackApiError
-import gspread_asyncio
-from google.oauth2.service_account import Credentials
-import aiohttp
+
 
 # --- 設定 ---
 load_dotenv()
@@ -41,19 +28,7 @@ SLACK_CHANNEL_TYPE_B = os.getenv("SLACK_CHANNEL_TYPE_B")
 SLACK_CHANNEL_TYPE_B = os.getenv("SLACK_CHANNEL_TYPE_B")
 SLACK_MENTION_GROUP_ID = os.getenv("SLACK_MENTION_GROUP_ID")
 
-# GAS連携
-GAS_URL_NOTION_SYNC = os.getenv("GAS_URL_NOTION_SYNC")
-
-# --- FastAPI アプリ ---
-app = FastAPI()
-
-templates = Jinja2Templates(directory=TEMPLATE_DIR)
-
-# static 配信
-# app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
-# --- Slack Client ---
-slack_client = AsyncWebClient(token=SLACK_BOT_TOKEN) if SLACK_BOT_TOKEN else None
+tototototototootototot
 
 
 # --- Pydantic Models ---
