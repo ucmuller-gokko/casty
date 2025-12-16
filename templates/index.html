@@ -10,6 +10,8 @@
 
   <title>キャスト管理システム v1.4</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     body {
@@ -152,7 +154,7 @@
         "https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest",
         "https://www.googleapis.com/discovery/v1/apis/oauth2/v2/rest"
       ];
-      const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email';
+      const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/documents';
 
       // ========= State =========
       let tokenClient, gapiInited = false, gisInited = false;
@@ -312,9 +314,42 @@
       function gisLoaded() {
         tokenClient = google.accounts.oauth2.initTokenClient({
           client_id: CLIENT_ID, scope: SCOPES,
-          callback: (tokenResponse) => { if (tokenResponse.error) throw tokenResponse; localStorage.setItem('gapi_token', JSON.stringify(tokenResponse)); updateUI(true); },
+          callback: (tokenResponse) => {
+            if (window.authResolver) {
+              if (tokenResponse.error) {
+                window.authRejecter(tokenResponse);
+              } else {
+                localStorage.setItem('gapi_token', JSON.stringify(tokenResponse));
+                window.authResolver(tokenResponse);
+              }
+              window.authResolver = null;
+              window.authRejecter = null;
+              return;
+            }
+
+            if (tokenResponse.error) throw tokenResponse;
+            localStorage.setItem('gapi_token', JSON.stringify(tokenResponse));
+            updateUI(true);
+          },
         });
         gisInited = true; maybeCheckTokenAndLoad();
+      }
+
+      async function ensureAuth() {
+        const token = gapi.client.getToken();
+        if (token && currentUser) return true; // Valid session
+
+        try {
+          await new Promise((resolve, reject) => {
+            window.authResolver = resolve;
+            window.authRejecter = reject;
+            tokenClient.requestAccessToken({ prompt: '' });
+          });
+          return true;
+        } catch (e) {
+          console.warn("Silent refresh failed", e);
+          return false;
+        }
       }
       function maybeCheckTokenAndLoad() {
         if (gapiInited && gisInited) {
@@ -351,6 +386,8 @@
           currentUser = null; isAdmin = false;
           document.getElementById('user-name')?.classList.add('hidden');
           document.querySelectorAll('.admin-only').forEach(el => el.classList.add('hidden'));
+          // Hide all views
+          document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
           showMessage('サインインして、キャスト管理を始めましょう。', 'info');
           showLoader(false);
         }
@@ -487,7 +524,6 @@
 
           // Shooting Schedule (from new sheet)
           if (vr.length > 3 && vr[3].values) {
-            console.log("DEBUG: Raw schedule data from sheet:", JSON.stringify(vr[3].values));
             const scheduleValues = vr[3].values || [];
             // Header: Date, Account, Project, Role, Cast, IN, OUT, Location, Address, NotionURL, Emergency
             // Index:  0     1        2        3     4     5   6    7         8        9          10
@@ -541,6 +577,8 @@
               if (cast) {
                 if (!shootingScheduleData.has(cast.castId)) shootingScheduleData.set(cast.castId, new Set());
                 shootingScheduleData.get(cast.castId).add(date);
+              } else {
+                console.warn(`Shooting Schedule: Cast not found for name "${castName}"`);
               }
             });
           }
@@ -557,7 +595,6 @@
               cd: row[4] || '',
               fd: row[5] || ''
             })).filter(item => item.date);
-            console.log("DEBUG: Loaded Shooting List:", window.shootingListData);
           } else {
             window.shootingListData = [];
           }
@@ -574,7 +611,6 @@
                 window.internalCastMap.set(name, uid);
               }
             });
-            console.log("DEBUG: Loaded Internal Cast Map:", window.internalCastMap);
           }
 
           // Helper to extract NotionID from URL
@@ -799,7 +835,6 @@
 
         filtered.forEach(cast => {
           const stat = getCastStatusForDates(cast.castId, selectedDates);
-          console.log(`DEBUG: Status for ${cast.name} (ID: ${cast.castId}):`, stat); // Log status check
           const inCart = !!cart[cast.castId];
 
           let badge = '', solid = false;
@@ -1210,7 +1245,6 @@
             return;
           }
 
-          console.log("Slack status update notify success");
         } catch (e) {
           console.error("Slack status update notify exception", e);
           showMessage("Slackへのステータス更新通知でエラーが発生しました。", "error");
@@ -1311,9 +1345,7 @@
           }
 
           // 「決定」の時だけ撮影連絡DBへ追加（外部キャストのみ）
-          console.log(`DEBUG: changeCastingStatus calling. Status=${newStatus}, ID=${castingId}, isInternal=${rec.isInternal}`);
           if (rec.isInternal) {
-            console.log("Internal cast, skipping Shooting Contact DB addition.");
           }
           if ((newStatus === "決定" || newStatus === "OK") && !rec.isInternal) {
             const updaterEmail = currentUser?.email || '';
@@ -1321,7 +1353,6 @@
             // 香盤DBからデータを検索
             const scheduleKey = `${rec.castId}_${rec.startDate}`;
             const scheduleInfo = shootingScheduleData.get(scheduleKey) || {};
-            console.log(`DEBUG: Found schedule info for ${scheduleKey}:`, scheduleInfo);
 
             try {
               const addRes = await fetch("/api/shooting_contact/add", {
@@ -1346,7 +1377,6 @@
               if (!addRes.ok) {
                 console.error("Failed to add to shooting contact DB", await addRes.text());
               } else {
-                console.log("Successfully added to shooting contact DB");
               }
             } catch (err) {
               console.error("Exception calling shooting_contact/add", err);
@@ -2062,16 +2092,26 @@ ${rec.note || "なし"}
       function renderAgencyFilter() {
         const dd = document.getElementById('agency-filter-dropdown'); if (!dd) return;
         const agencies = [...new Set(castData.map(c => c.agency?.trim() || 'フリー'))].sort((a, b) => a.localeCompare(b, 'ja'));
-        dd.innerHTML = `
-      <div class="p-2 hover:bg-gray-100 cursor-pointer text-sm" onclick="selectAgency('')">すべて</div>
-      ${agencies.map(a => `<div class="p-2 hover:bg-gray-100 cursor-pointer text-sm" onclick="selectAgency('${a}')">${a}</div>`).join('')}
-    `;
+
+        dd.innerHTML = agencies.map(a => `
+          <label class="flex items-center px-3 py-2 hover:bg-gray-100 cursor-pointer">
+            <input type="checkbox" value="${a}" class="h-4 w-4 text-blue-600 border-gray-300 rounded mr-2" onchange="updateAgencyButton(); displayAvailableCasts();">
+            <span class="text-sm text-gray-700">${a}</span>
+          </label>
+        `).join('');
       }
-      function selectAgency(name) {
+
+      function updateAgencyButton() {
         const btn = document.getElementById('agency-filter-btn');
-        if (btn) btn.firstElementChild.textContent = name || '選択...';
-        document.getElementById('agency-filter-dropdown')?.classList.add('hidden');
-        displayAvailableCasts();
+        if (!btn) return;
+        const checked = document.querySelectorAll('#agency-filter-dropdown input[type="checkbox"]:checked');
+        if (checked.length === 0) {
+          btn.firstElementChild.textContent = '選択...';
+        } else if (checked.length === 1) {
+          btn.firstElementChild.textContent = checked[0].value;
+        } else {
+          btn.firstElementChild.textContent = `選択中 (${checked.length})`;
+        }
       }
 
       // ========= Shooting List (Area 2) =========
@@ -2152,10 +2192,64 @@ ${rec.note || "なし"}
         // "一旦ここまでできたら、カートの変更を伝えます。"
         // So for now, I just need to store it in `selectedShooting`.
         // I will log it for debug.
-        console.log("Selected Shooting:", selectedShooting);
       }
 
       // ========= Cart =========
+      async function submitNewOrder() {
+        // 1. Auth Check (Auto-Login)
+        const isAuth = await ensureAuth();
+        if (!isAuth) {
+          alert("ログアウト状態のため送信できません。再ログインしてください。");
+          handleAuthClick();
+          return;
+        }
+
+        if (Object.keys(cart).length === 0) {
+          showMessage('カートが空です。', 'info');
+          return;
+        }
+
+        // Show Custom Confirmation Modal instead of native confirm
+        const modal = document.getElementById('special-confirmation-modal');
+        if (modal) {
+          modal.classList.remove('hidden');
+
+          // Reset checkboxes
+          document.getElementById('confirm-intimacy').checked = false;
+          document.getElementById('confirm-child').checked = false;
+
+          // Setup one-time event listener for OK button
+          const okBtn = document.getElementById('special-confirm-ok');
+          // Clone button to remove old listeners
+          const newOkBtn = okBtn.cloneNode(true);
+          okBtn.parentNode.replaceChild(newOkBtn, okBtn);
+
+          newOkBtn.addEventListener('click', async () => {
+            modal.classList.add('hidden');
+
+            // Handle Intimacy Check
+            const isIntimacy = document.getElementById('confirm-intimacy').checked;
+            if (isIntimacy) {
+              // Append to note for all items in cart
+              for (const key in cart) {
+                if (cart[key].note) {
+                  cart[key].note += "\n【インティマシーシーンあり】";
+                } else {
+                  cart[key].note = "【インティマシーシーンあり】";
+                }
+              }
+            }
+
+            // Call submission
+            await confirmProvisionalBookings();
+          });
+        } else {
+          // Fallback if modal missing
+          if (!confirm('この内容でオーダーを送信しますか？')) return;
+          await confirmProvisionalBookings();
+        }
+      }
+
       function addToCart(castId) {
         if (!castId) return;
         if (selectedDates.length === 0) {
@@ -2879,6 +2973,10 @@ ${roleName}：${item.cast.name}`;
                     onclick="saveShootingRow('${item.castingId}', this)">
                     💾 保存
                 </button>
+                <button class="px-2 py-1 bg-indigo-600 text-white rounded text-xs hover:bg-indigo-700 shadow-sm whitespace-nowrap w-full"
+                    onclick="createOrderDoc('${item.castingId}')">
+                    📄 発注書作成
+                </button>
                 ${mailBtn}
             </div>`;
 
@@ -3046,65 +3144,195 @@ ${roleName}：${item.cast.name}`;
         }
         const displayUrl = formatDriveUrl(cast.imageUrl);
 
+        // Purchase Order Button Condition
+        const relevantCasting = castingData.find(c => c.castId === castId && overlaps(selectedDates[0], selectedDates[selectedDates.length - 1], c.startDate, c.endDate));
+        const canDownloadOrder = relevantCasting && ['OK', '香盤連絡待ち', '決定'].includes(relevantCasting.status);
+
         detailModal.innerHTML = `
           <div class="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto relative flex flex-col md:flex-row">
-            <button id="close-detail-modal" class="absolute top-4 right-4 text-gray-500 hover:text-gray-700 z-10">
-              <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-            </button>
-            
-            <div class="w-full md:w-1/2 bg-gray-100 flex items-center justify-center p-4">
-               ${displayUrl ? `<img src="${displayUrl}" alt="${cast.name}" class="max-w-full max-h-[70vh] object-contain rounded shadow-sm" referrerpolicy="no-referrer">`
-            : `<div class="w-full h-64 flex items-center justify-center text-gray-400"><svg class="w-20 h-20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg></div>`}
-            </div>
-            
-            <div class="w-full md:w-1/2 p-8 flex flex-col">
-              <h2 class="text-3xl font-bold mb-2">${cast.name}</h2>
-              <p class="text-lg text-gray-600 mb-4">${cast.agency || 'フリー'}</p>
-              
-              <div class="flex space-x-4 mb-6">
-                ${snsLinks.join('')}
-              </div>
+             <button onclick="document.getElementById('cast-detail-modal').remove()" class="absolute top-4 right-4 text-gray-500 hover:text-gray-700 z-10">
+               <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+             </button>
+             
+             <!-- Left: Image -->
+             <div class="w-full md:w-1/2 bg-gray-100 flex items-center justify-center p-4">
+               ${cast.imageUrl ? `<img src="${formatDriveUrl(cast.imageUrl)}" class="max-w-full max-h-[70vh] object-contain rounded shadow-sm" referrerpolicy="no-referrer">`
+            : `<div class="text-gray-400">No Image</div>`}
+             </div>
 
-              <div class="space-y-3 text-sm text-gray-700 mb-8">
-                <div class="flex border-b pb-2"><span class="w-24 font-bold text-gray-500">年齢</span><span>${Number.isFinite(cast.age) ? cast.age + '歳' : '-'}</span></div>
-                <div class="flex border-b pb-2"><span class="w-24 font-bold text-gray-500">性別</span><span>${cast.gender || '-'}</span></div>
-                <div class="flex border-b pb-2"><span class="w-24 font-bold text-gray-500">連絡先</span><span>${cast.email || '-'}</span></div>
-                <div class="flex border-b pb-2"><span class="w-24 font-bold text-gray-500">備考</span><span>${cast.notes || '-'}</span></div>
-              </div>
+             <!-- Right: Info -->
+             <div class="w-full md:w-1/2 p-8 flex flex-col">
+               <h2 class="text-3xl font-bold mb-2">${cast.name}</h2>
+               <p class="text-lg text-gray-600 mb-4">${cast.agency || 'フリー'}</p>
+               
+               <div class="flex space-x-4 mb-6">
+                 ${snsLinks.join('')}
+               </div>
 
-              <div class="mt-auto">
-                <button id="detail-add-cart" class="w-full ${btnClass} text-white font-bold py-3 px-4 rounded-lg shadow transition" ${disabled ? 'disabled' : ''}>
-                  ${btnText}
-                </button>
-              </div>
-            </div>
+               <div class="space-y-3 text-sm text-gray-700 mb-8">
+                 <div class="flex border-b pb-2">
+                   <span class="w-24 font-bold text-gray-500">年齢</span>
+                   <span>${cast.age ? cast.age + '歳' : '-'}</span>
+                 </div>
+                 <div class="flex border-b pb-2">
+                   <span class="w-24 font-bold text-gray-500">性別</span>
+                   <span>${cast.gender || '-'}</span>
+                 </div>
+                 <div class="flex border-b pb-2">
+                   <span class="w-24 font-bold text-gray-500">連絡先</span>
+                   <span class="break-all">${cast.email || '-'}</span>
+                 </div>
+                 <div class="flex border-b pb-2">
+                   <span class="w-24 font-bold text-gray-500">備考</span>
+                   <span class="whitespace-pre-wrap">${cast.notes || '-'}</span>
+                 </div>
+               </div>
+
+               <div class="mt-auto">
+                 <button onclick="addToCart('${cast.castId}'); document.getElementById('cast-detail-modal').remove();" 
+                   class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg shadow transition ${disabled ? 'opacity-50 cursor-not-allowed' : ''}" ${disabled ? 'disabled' : ''}>
+                   ${btnText}
+                 </button>
+               </div>
+             </div>
           </div>
         `;
 
         detailModal.classList.remove('hidden');
 
         // Event Listeners
-        detailModal.querySelector('#close-detail-modal').addEventListener('click', () => {
-          detailModal.classList.add('hidden');
-        });
         detailModal.addEventListener('click', (e) => {
           if (e.target === detailModal) detailModal.classList.add('hidden');
         });
+      }
 
-        if (!disabled) {
-          detailModal.querySelector('#detail-add-cart').addEventListener('click', () => {
-            addToCart(cast.castId);
-            detailModal.classList.add('hidden');
-            displayAvailableCasts(); // Refresh list to show "Added"
+      window.createOrderDoc = async function (castingId) {
+        // 1. Auth & Scope Check (Pre-emptive to avoid popup block)
+        const token = gapi.client.getToken();
+        const requiredScopes = [
+          'https://www.googleapis.com/auth/drive.file',
+          'https://www.googleapis.com/auth/documents'
+        ];
+        const hasScopes = token && google.accounts.oauth2.hasGrantedAllScopes(token, ...requiredScopes);
+
+        if (!token || !hasScopes) {
+          // Save the action to retry after auth
+          tokenClient.callback = async (resp) => {
+            if (resp.error) {
+              console.error('Auth Error:', resp);
+              showMessage('権限の許可がキャンセルされました。', 'error');
+              return;
+            }
+            // Retry
+            showMessage('権限が更新されました。作成を開始します...', 'info');
+            await createOrderDoc(castingId);
+          };
+          // Request consent
+          tokenClient.requestAccessToken({ prompt: 'consent' });
+          return;
+        }
+
+        // 2. Data Preparation
+        // 修正: castingId から window.shootingContactData (API結果) を検索
+        let targetCasting = null;
+        if (window.shootingContactData) {
+          targetCasting = window.shootingContactData.find(item => item.castingId === castingId);
+        }
+
+        // Fallback
+        if (!targetCasting) {
+          targetCasting = castingData.find(c => c.castingId === castingId);
+        }
+
+        if (!targetCasting) {
+          showMessage('対象のキャスティング情報が見つかりません。', 'error');
+          return;
+        }
+
+        const castName = targetCasting.castName || targetCasting.name || '不明';
+        const projectName = targetCasting.projectName || '不明';
+        const roleName = targetCasting.roleName || '不明';
+        const dateStr = targetCasting.date || targetCasting.startDate || '';
+        const cost = targetCasting.cost || '';
+        const note = targetCasting.note || '';
+
+        const TEMPLATE_ID = '1I7AMieD2gdGG-HQtyCQcs9I0JLbDrCIoeXGHqXVDK48';
+        const FOLDER_ID = '1-MLTouldn_rcOjJWFhJmS9zdO0K71isB';
+
+        showLoader(true);
+        try {
+          const title = `${dateStr.replace(/\//g, '')}_${projectName}_${castName}_発注書`;
+
+          // 3. Copy Template via Drive API (fetch)
+          const copyRes = await fetch(`https://www.googleapis.com/drive/v3/files/${TEMPLATE_ID}/copy`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token.access_token}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              name: title,
+              parents: [FOLDER_ID]
+            })
           });
+
+          if (!copyRes.ok) {
+            const err = await copyRes.json();
+            throw new Error(err.error?.message || 'Template Copy Failed');
+          }
+          const fileData = await copyRes.json();
+          const fileId = fileData.id;
+
+          // 4. Replace Placeholders via Docs API (fetch)
+          // Placeholders: {{日付}}, {{キャスト名}}, {{案件名}}, {{役名}}, {{撮影日}}, {{金額}}, {{備考}}
+          const replacements = {
+            '{{日付}}': new Date().toLocaleDateString(),
+            '{{キャスト名}}': castName,
+            '{{案件名}}': projectName,
+            '{{役名}}': roleName,
+            '{{撮影日}}': dateStr,
+            '{{金額}}': cost,
+            '{{備考}}': note
+          };
+
+          const requests = Object.entries(replacements).map(([key, value]) => ({
+            replaceAllText: {
+              containsText: { text: key, matchCase: true },
+              replaceText: value || ''
+            }
+          }));
+
+          const updateRes = await fetch(`https://docs.googleapis.com/v1/documents/${fileId}:batchUpdate`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token.access_token}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ requests })
+          });
+
+          if (!updateRes.ok) {
+            const err = await updateRes.json();
+            throw new Error(err.error?.message || 'Docs BatchUpdate Failed');
+          }
+
+          showMessage(`発注書を作成しました。\nフォルダに保存されました。`, 'success');
+          // Open the doc
+          window.open(`https://docs.google.com/document/d/${fileId}/edit`, '_blank');
+
+        } catch (e) {
+          console.error(e);
+          showMessage('発注書の作成に失敗しました: ' + e.message, 'error');
+        } finally {
+          showLoader(false);
         }
       }
+        ;
 
       window.openShootMailModal = openShootMailModal;
       window.openShootStatusModal = openShootStatusModal;
 
       function openShootMailModal(castingId) {
-        console.log("openShootMailModal called for:", castingId); // Debug log
 
         // Try to find in shootingContactData first, then castingData
         let item = (window.shootingContactData || []).find(i => i.castingId === castingId);
@@ -3157,7 +3385,6 @@ ${roleName}：${item.cast.name}`;
         // Find email from castingData (Column U) - redundant if item is from castingData but safe
         const originalRec = castingData.find(c => c.castingId === castingId);
         const castEmail = originalRec?.email || item.email || ""; // Fallback to item.email if available
-        console.log("Found email:", castEmail);
 
         modal.innerHTML = `
         <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full p-6">
@@ -3220,7 +3447,6 @@ ${roleName}：${item.cast.name}`;
           }
 
           if (nextStatus) {
-            console.log(`Auto-updating status: ${currentStatus} -> ${nextStatus}`);
             if (isCastingItem) {
               // Call Casting Status Update API
               await changeCastingStatus(castingId, nextStatus, "メール作成による自動更新");
@@ -3291,7 +3517,6 @@ ${roleName}：${item.cast.name}`;
           if (!res.ok) {
             throw new Error("Update failed");
           }
-          console.log("Updated fields:", fields);
           // Optional: Show toast
         } catch (e) {
           console.error(e);
@@ -3355,86 +3580,198 @@ ${roleName}：${item.cast.name}`;
         renderNewCartModal(modal);
       }
       window.submitNewOrder = async function () {
-        // Cleanup: Remove empty roles and projects
+        // 1. Auth Check (Auto-Login attempt / サイレントリフレッシュ)
+        // ここでトークン切れなら再取得を試みます
+        const isAuth = await ensureAuth();
+        if (!isAuth) {
+          alert("ログアウト状態のため送信できません。再ログインしてください。");
+          handleAuthClick();
+          return;
+        }
+
+        // Cleanup: 役名などが空の無効なデータを掃除
         cartProjects = cartProjects.map(p => {
           const validRoles = p.roles.filter(r => r.name.trim() && r.castIds.length > 0);
           return { ...p, roles: validRoles };
-        }).filter(p => p.roles.length > 0); // Keep projects only if they have valid roles? 
-        // User said: "作品を追加した場合、デフォルトで2作品分...自動的に削除するように"
-        // If a project has title but no roles, should it be removed?
-        // "役名が入力されていない場合やキャストが入っていない場合は...自動的に削除"
-        // If a project has no valid roles, it effectively has no content to order.
-        // So removing projects with 0 valid roles seems correct.
+        }).filter(p => p.roles.length > 0);
 
-        renderCartModal(); // Re-render to show cleaned state (optional, but good for feedback)
+        // カート画面を再描画（掃除後の状態にするため）
+        renderCartModal();
 
         if (cartProjects.length === 0) {
           showMessage('有効なオーダー（役名とキャストが入力されたもの）がありません。', 'error');
           return;
         }
 
-        // Validate (Remaining validation for Title)
+        // Validate
         for (const p of cartProjects) {
           if (!p.title.trim()) {
             showMessage('作品名が入力されていないものがあります。', 'error');
             return;
           }
-          // Roles are already filtered to have name and casts, so no need to check them again
         }
 
-        // Prepare Data
-        const accountName = selectedShooting ? selectedShooting.team : (currentUser?.name || '不明');
+        // ★ここで確認モーダルを開く
+        renderConfirmationModal();
+      }
+
+      function renderConfirmationModal() {
+        const modal = document.getElementById('confirmation-modal');
+        if (!modal) return;
+
+        // 【修正】データソースの優先順位を変更
+        // 新しいDrag&Dropカート(cartProjects)がある場合はそこからタイトルを取得
+        let mainProjectName = '';
+        if (cartProjects && cartProjects.length > 0) {
+          mainProjectName = cartProjects[0].title;
+        } else if (cartMeta && cartMeta.projectNames && cartMeta.projectNames[0]) {
+          // 古いフローのバックアップ
+          mainProjectName = cartMeta.projectNames[0];
+        }
+
+        const booked = currentUser?.email || '';
+
+        // バリデーション修正
+        if (!mainProjectName) {
+          showMessage('作品名が入力されていません。', 'error');
+          return;
+        }
+        if (!booked) {
+          // ensureAuthでチェック済みのはずだが念の為
+          showMessage('ログイン情報が取得できませんでした。もう一度サインインしてください。', 'error');
+          return;
+        }
+
+        modal.innerHTML = `
+      <div class="bg-white rounded-lg shadow-xl max-w-lg w-full p-6">
+        <h3 class="text-xl font-bold mb-4">最終確認</h3>
+        <p class="text-sm text-gray-600 mb-4">作品名：<span class="font-bold text-black">${mainProjectName}</span> 他</p>
+        
+        <div class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700">インティマシーシーンの有無</label>
+            <div class="mt-2 flex space-x-4">
+              <label class="inline-flex items-center">
+                <input type="radio" name="intimacy" value="あり" class="form-radio">
+                <span class="ml-2 font-bold text-red-600">あり</span>
+              </label>
+              <label class="inline-flex items-center">
+                <input type="radio" name="intimacy" value="なし" class="form-radio" checked>
+                <span class="ml-2">なし</span>
+              </label>
+              <label class="inline-flex items-center">
+                <input type="radio" name="intimacy" value="未定" class="form-radio">
+                <span class="ml-2">未定</span>
+              </label>
+            </div>
+            <p class="text-xs text-gray-500 mt-1">※「あり」を選択すると、備考欄に自動追記されます。</p>
+          </div>
+          <div class="bg-yellow-50 p-3 rounded border border-yellow-200">
+            <label class="flex items-start cursor-pointer">
+              <input id="child-actor-check" type="checkbox"
+                     class="mt-1 h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
+              <span class="ml-3 text-sm text-gray-700 leading-snug">
+                <strong>未成年者（18歳未満）</strong>が含まれる場合、<br>
+                労働基準法（深夜労働の禁止・労働時間制限など）および関連法規を遵守した撮影計画であることを確認しました。
+              </span>
+            </label>
+          </div>
+        </div>
+        <div class="mt-6 flex justify-end gap-3">
+          <button id="confirm-cancel" class="px-4 py-2 rounded-md border border-gray-300 hover:bg-gray-50">キャンセル</button>
+          <button id="confirm-final" class="px-6 py-2 rounded-md bg-blue-600 text-white font-bold shadow hover:bg-blue-700">
+            同意して送信
+          </button>
+        </div>
+      </div>
+    `;
+        modal.classList.remove('hidden');
+
+        // イベント設定
+        modal.querySelector('#confirm-cancel').addEventListener('click', closeConfirmationModal);
+
+        // 送信ボタンクリック時
+        modal.querySelector('#confirm-final').addEventListener('click', async () => {
+          const intimacyValue = modal.querySelector('input[name="intimacy"]:checked').value;
+          const childActorConfirmed = modal.querySelector('#child-actor-check').checked;
+
+          // 子役が含まれているか簡易チェック (cart内の全キャストを対象)
+          const hasChildActor = Object.values(cart).some(item =>
+            item.cast && item.cast.age !== null && item.cast.age < 18
+          );
+
+          if (hasChildActor && !childActorConfirmed) {
+            showMessage(
+              '未成年キャストが含まれています。法令遵守の確認にチェックを入れてください。',
+              'error'
+            );
+            return;
+          }
+
+          // ★ここで実際の送信処理 (processNewOrderFromModal) を呼ぶ
+          await processNewOrderFromModal({
+            intimacy: intimacyValue === 'あり',
+            childConfirmed: childActorConfirmed
+          });
+        });
+      }
+
+      function closeConfirmationModal() {
+        const modal = document.getElementById('confirmation-modal');
+        if (modal) modal.classList.add('hidden');
+      }
+
+      // モーダルから呼ばれるラッパー関数
+      async function processNewOrderFromModal(options) {
+        const teamName = selectedShooting ? selectedShooting.team : (currentUser?.name || '不明');
         const pageId = selectedShooting ? selectedShooting.pageId : '';
         const notionUrl = pageId ? `https://www.notion.so/${pageId.replace(/-/g, '')}` : '';
 
-        // Resolve CCs
+        // CC設定
         let ccString = "";
         if (selectedShooting && window.internalCastMap) {
           const names = [];
           if (selectedShooting.cd) names.push(...selectedShooting.cd.split(/[,、]/).map(s => s.trim()));
           if (selectedShooting.fd) names.push(...selectedShooting.fd.split(/[,、]/).map(s => s.trim()));
-
           const ccIds = new Set();
           names.forEach(name => {
-            if (window.internalCastMap.has(name)) {
-              ccIds.add(window.internalCastMap.get(name));
-            }
+            if (window.internalCastMap.has(name)) ccIds.add(window.internalCastMap.get(name));
           });
-
-          if (ccIds.size > 0) {
-            ccString = Array.from(ccIds).map(uid => `<@${uid}>`).join(' ');
-          }
+          if (ccIds.size > 0) ccString = Array.from(ccIds).map(uid => `<@${uid}>`).join(' ');
         }
-
-        // Construct Order Data (Flattened for Sheet)
-        // We need to call confirmProvisionalBookings-like logic but adapted for this structure.
-        // Or just construct the payload and call sendOrder directly?
-        // Existing `confirmProvisionalBookings` does a lot (sheet update, calendar, slack).
-        // Let's adapt `confirmProvisionalBookings` to accept our new structure or create a new handler.
-        // Since the structure is quite different (Project -> Role -> Candidates), let's create a new handler `processNewOrder`.
 
         showLoader(true);
         try {
           await processNewOrder({
-            accountName,
-            pageId,
-            notionUrl,
+            accountName: teamName,
+            pageId: pageId,
+            notionUrl: notionUrl,
             projects: cartProjects,
-            ccString,
-            slackThreadTs: isAdditionalOrderMode && additionalOrderContext ? additionalOrderContext.slackThreadTs : null // Pass Thread TS
+            ccString: ccString,
+            slackThreadTs: isAdditionalOrderMode && additionalOrderContext ? additionalOrderContext.slackThreadTs : null,
+            // ★追加オプション
+            intimacy: options.intimacy
           });
+
           closeCartModal();
-          // Clear cart?
+          closeConfirmationModal(); // モーダルも閉じる
+
+          // Reset
           cart = {};
           cartProjects = [];
           updateCartCount();
           displayAvailableCasts();
+
           showMessage('オーダーを送信しました。', 'success');
+
+          // ステータス反映のため少し待って再読み込み
+          setTimeout(() => loadAllData(), 2000);
+
         } catch (e) {
           console.error(e);
           if (e.status === 401 || e.result?.error?.code === 401) {
-            showMessage('Google認証が切れました。再ログインしてください。', 'error');
-            // Optional: tokenClient.requestAccessToken();
+            // ensureAuthでカバーしているはずだが念の為
+            showMessage('認証エラーが発生しました。リロードして再ログインしてください。', 'error');
           } else {
             showMessage('オーダー送信に失敗しました: ' + (e.message || 'Unknown error'), 'error');
           }
@@ -3443,26 +3780,33 @@ ${roleName}：${item.cast.name}`;
         }
       }
 
+      // 実際のデータ構築とAPI送信を行う関数
       async function processNewOrder(data) {
-        // 1. Prepare Data
         const shootDate = selectedShooting ? selectedShooting.date : (selectedDates[0] || '');
         const nowISO = new Date().toISOString();
         const updaterEmail = currentUser?.email || '';
         const internalEvents = [];
-        const tempAssignments = {}; // For priority calculation
+        const tempAssignments = {};
 
-        // Collect all orders from all projects
+        // Collect all orders & Apply Intimacy Note
         const allOrders = data.projects.flatMap(proj =>
           proj.roles.flatMap((role, rIdx) =>
             role.castIds.map((cid, cIdx) => {
               const cast = cart[cid]?.cast;
               const isInternal = cast?.isInternal;
+
+              // ★ インティマシーシーンありの場合、備考に追記
+              let finalNote = role.note || '';
+              if (data.intimacy) {
+                finalNote = "【インティマシーシーンあり】\n" + finalNote;
+              }
+
               return {
-                castingId: 'temp_' + Date.now() + '_' + Math.random(), // Temp ID
+                castingId: 'temp_' + Date.now() + '_' + Math.random(),
                 roleName: role.name,
                 castName: cast?.name || '不明',
                 rank: cIdx + 1,
-                note: role.note,
+                note: finalNote.trim(),
                 projectName: proj.title,
                 slack_user_id: isInternal ? cast.slackMentionId : null,
                 castId: cid,
@@ -3475,10 +3819,9 @@ ${roleName}：${item.cast.name}`;
 
         if (allOrders.length === 0) return;
 
-        // Unique Project Names for Top Level
         const uniqueProjectNames = [...new Set(data.projects.map(p => p.title))].join(' / ');
 
-        // 2. Send Slack Notification (ONE request)
+        // 2. Send Slack Notification Payload
         const payload = {
           accountName: data.accountName,
           projectName: uniqueProjectNames,
@@ -3495,17 +3838,21 @@ ${roleName}：${item.cast.name}`;
           })),
           orderType: "pattern_a",
           ccString: data.ccString || "",
-          slackThreadTs: data.slackThreadTs || null // Include in payload
+          slackThreadTs: data.slackThreadTs || null
         };
 
-        // PDF Upload
+        // PDF Upload - Multiple Files Support
         const fileInput = document.getElementById('order-pdf-file');
-        const file = fileInput?.files?.[0];
+        const files = fileInput?.files;
 
         const formData = new FormData();
         formData.append('payload_str', JSON.stringify(payload));
-        if (file) {
-          formData.append('file', file);
+
+        // 【修正】複数ファイルをループしてFormDataに追加
+        if (files && files.length > 0) {
+          for (let i = 0; i < files.length; i++) {
+            formData.append('files', files[i]);
+          }
         }
 
         let slackThreadTs = '';
@@ -3519,8 +3866,7 @@ ${roleName}：${item.cast.name}`;
 
           if (!slackRes.ok) throw new Error('Slack notification failed');
           const slackData = await slackRes.json();
-          // If additional order, use the ORIGINAL thread TS for the sheet (so future updates stay in the same thread)
-          // If new order, use the new message TS.
+
           slackThreadTs = data.slackThreadTs || slackData.ts;
           slackPermalink = slackData.permalink;
         } catch (e) {
@@ -3528,45 +3874,30 @@ ${roleName}：${item.cast.name}`;
           showMessage('Slack通知に失敗しましたが、シートへの保存は続行します。', 'error');
         }
 
-        // 3. Prepare Sheet Rows (Merged by Cast ID)
+        // 3. Prepare Sheet Rows (以下、既存コードと同様)
         const newRows = [];
-
-        // Group by Cast ID
         const castGroups = new Map();
         allOrders.forEach(o => {
-          if (!castGroups.has(o.castId)) {
-            castGroups.set(o.castId, []);
-          }
+          if (!castGroups.has(o.castId)) castGroups.set(o.castId, []);
           castGroups.get(o.castId).push(o);
         });
 
-        // Create Rows
         for (const [castId, orders] of castGroups) {
           const firstOrder = orders[0];
           const cast = firstOrder.cast;
 
-          // Merge Fields
           const mergedProjectName = [...new Set(orders.map(o => o.projectName))].join(' / ');
           const mergedRoleName = orders.map(o => o.roleName).join(' / ');
           const mergedType = [...new Set(orders.map(o => o.type))].join(' / ');
           const mergedNote = orders.map(o => o.note).filter(n => n).join(' / ');
 
-          // Use the lowest rank (best rank) or just 1?
-          // If Cast is Rank 1 in Proj A and Rank 2 in Proj B...
-          // Sheet has one Rank column.
-          // Let's use the minimum rank.
           const minRank = Math.min(...orders.map(o => o.rank));
-
           const castingId = 'casting_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-
-          // Priority Calculation
           const castPriority = getNextCastPriority(castId, shootDate, shootDate, tempAssignments);
           tempAssignments[`${castId}_${shootDate}_${shootDate}`] = castPriority;
 
-          // Status Logic
           const initialStatus = cast.isInternal ? '打診中' : 'オーダー待ち';
 
-          // Internal Event Data
           if (cast.isInternal) {
             internalEvents.push({
               accountName: data.accountName,
@@ -3578,11 +3909,9 @@ ${roleName}：${item.cast.name}`;
               start: shootDate,
               end: shootDate,
               email: cast.email,
-              // rowNumber will be set after append
             });
           }
 
-          // Structure Data (Project -> Role -> Rank mapping)
           const structureData = orders.map(o => ({
             project: o.projectName,
             role: o.roleName,
@@ -3593,33 +3922,15 @@ ${roleName}：${item.cast.name}`;
           const structureJson = JSON.stringify(structureData);
 
           newRows.push([
-            castingId,          // A
-            data.accountName,   // B
-            mergedProjectName,  // C
-            mergedRoleName,     // D
-            cast.castId,        // E
-            cast.name,          // F
-            shootDate,          // G (Start)
-            shootDate,          // H (End)
-            minRank.toString(), // I (Rank)
-            initialStatus,      // J (Status)
-            mergedNote,         // K
-            slackThreadTs,      // L
-            slackPermalink,     // M
-            mergedType,         // N (Main/Sub)
-            '',                 // O (CalendarEventID)
-            data.pageId,        // P (ProjectID / NotionID)
-            nowISO,             // Q
-            updaterEmail,       // R
-            castPriority,       // S (Priority)
-            cast.isInternal ? '内部' : '外部', // T
-            cast.email || '',   // U (Email)
-            '',                 // V (Cost)
-            structureJson       // W (Structure Data)
+            castingId, data.accountName, mergedProjectName, mergedRoleName,
+            cast.castId, cast.name, shootDate, shootDate, minRank.toString(),
+            initialStatus, mergedNote, slackThreadTs, slackPermalink,
+            mergedType, '', data.pageId, nowISO, updaterEmail, castPriority,
+            cast.isInternal ? '内部' : '外部', cast.email || '', '', structureJson
           ]);
         }
 
-        // 4. Batch Append to Sheet
+        // 4. Batch Append
         if (newRows.length > 0) {
           const appendResult = await gapi.client.sheets.spreadsheets.values.append({
             spreadsheetId: SPREADSHEET_ID,
@@ -3629,28 +3940,17 @@ ${roleName}：${item.cast.name}`;
             resource: { values: newRows }
           });
 
-          // Calculate Row Numbers for Internal Events
           const updatedRange = appendResult.result.updates.updatedRange;
           const match = updatedRange.match(/!A(\d+):/);
           if (match) {
             const startRow = parseInt(match[1], 10);
-
-            // Map castingId to row number
             const rowNumberByCastingId = new Map();
             for (let i = 0; i < newRows.length; i++) {
-              const castingId = newRows[i][0];
-              const rowNum = startRow + i;
-              if (castingId) {
-                rowNumberByCastingId.set(castingId, rowNum);
-              }
+              if (newRows[i][0]) rowNumberByCastingId.set(newRows[i][0], startRow + i);
             }
-
-            // Assign row numbers to internalEvents
             internalEvents.forEach(ev => {
               ev.rowNumber = rowNumberByCastingId.get(ev.castingId) || null;
             });
-
-            // Create Calendar Events
             await createInternalHoldEvents(internalEvents);
           }
         }
@@ -3725,7 +4025,7 @@ ${roleName}：${item.cast.name}`;
             <div class="p-4 border-t bg-white flex justify-between items-center">
               <div class="flex items-center gap-2">
                  <label class="text-sm font-bold text-gray-600">PDF添付:</label>
-                 <input type="file" id="order-pdf-file" accept="application/pdf" class="text-sm text-gray-600 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+                 <input type="file" id="order-pdf-file" accept="application/pdf" multiple class="text-sm text-gray-600 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
               </div>
               <div class="flex gap-3">
                 <button onclick="closeCartModal()" class="px-4 py-2 rounded-md border border-gray-300">閉じる</button>
@@ -3950,93 +4250,7 @@ ${roleName}：${item.cast.name}`;
         });
       }
 
-      function renderConfirmationModal() {
-        const modal = document.getElementById('confirmation-modal');
-        if (!modal) return;
 
-        const project = cartMeta.projectNames?.[0] || '';
-        const booked = currentUser?.email || '';
-
-        if (!project) {
-          showMessage('STEP1で作品名1を入力してください。', 'error');
-          return;
-        }
-        if (!booked) {
-          showMessage('ログイン情報が取得できませんでした。もう一度サインインしてください。', 'error');
-          return;
-        }
-
-        modal.innerHTML = `
-      <div class="bg-white rounded-lg shadow-xl max-w-lg w-full p-6">
-        <h3 class="text-xl font-bold mb-4">最終確認</h3>
-        <div class="space-y-4">
-          <div>
-            <label class="block text-sm font-medium text-gray-700">インティマシーシーンの有無</label>
-            <div class="mt-2 flex space-x-4">
-              <label class="inline-flex items-center">
-                <input type="radio" name="intimacy" value="あり" class="form-radio">
-                <span class="ml-2">あり</span>
-              </label>
-              <label class="inline-flex items-center">
-                <input type="radio" name="intimacy" value="なし" class="form-radio" checked>
-                <span class="ml-2">なし</span>
-              </label>
-              <label class="inline-flex items-center">
-                <input type="radio" name="intimacy" value="未定" class="form-radio">
-                <span class="ml-2">未定</span>
-              </label>
-            </div>
-          </div>
-          <div>
-            <label class="flex items-start">
-              <input id="child-actor-check" type="checkbox"
-                     class="h-5 w-5 text-blue-600 border-gray-300 rounded mt-1">
-              <span class="ml-3 text-sm text-gray-700">
-                子役（15歳未満）が含まれる場合、法定労働時間や休憩、深夜労働の制限など、
-                関連法規を遵守した撮影計画であることを確認しました。
-              </span>
-            </label>
-          </div>
-        </div>
-        <div class="mt-6 flex justify-end gap-3">
-          <button id="confirm-cancel" class="px-4 py-2 rounded-md border border-gray-300">キャンセル</button>
-          <button id="confirm-final" class="px-4 py-2 rounded-md bg-blue-600 text-white font-semibold">
-            同意して確定
-          </button>
-        </div>
-      </div>
-    `;
-        modal.classList.remove('hidden');
-
-        modal.querySelector('#confirm-cancel').addEventListener('click', closeConfirmationModal);
-        modal.querySelector('#confirm-final').addEventListener('click', () => {
-          const intimacyValue = modal.querySelector('input[name="intimacy"]:checked').value;
-          const childActorConfirmed = modal.querySelector('#child-actor-check').checked;
-
-          const hasChildActor = Object.values(cart).some(item => item.cast.age !== null && item.cast.age < 15);
-
-          if (hasChildActor && !childActorConfirmed) {
-            showMessage(
-              '子役が含まれています。稼働時間に関する規定の確認にチェックを入れてください。',
-              'error'
-            );
-            return;
-          }
-
-          confirmProvisionalBookings({
-            intimacyScene: intimacyValue,
-            childActorCheck: childActorConfirmed,
-          });
-        });
-      }
-
-      function closeConfirmationModal() {
-        const modal = document.getElementById('confirmation-modal');
-        if (modal) {
-          modal.classList.add('hidden');
-          modal.innerHTML = '';
-        }
-      }
 
       // C-2: 新規外部キャスト作成モーダル
       async function openNewExternalCastModal() {
@@ -4044,7 +4258,7 @@ ${roleName}：${item.cast.name}`;
         if (!modal) return;
 
         modal.innerHTML = `
-      <div class="bg-white rounded-lg shadow-xl max-w-md w-full p-5">
+          < div class="bg-white rounded-lg shadow-xl max-w-md w-full p-5" >
         <div class="flex items-center justify-between mb-3">
           <h3 class="text-lg font-bold">新規外部キャストを追加</h3>
           <button id="new-cast-close" class="text-gray-600 hover:text-gray-800">&times;</button>
@@ -4079,7 +4293,7 @@ ${roleName}：${item.cast.name}`;
           <button id="new-cast-cancel" class="px-4 py-2 rounded-md border border-gray-300">キャンセル</button>
           <button id="new-cast-save" class="px-4 py-2 rounded-md bg-blue-600 text-white font-semibold">保存</button>
         </div>
-      </div>`;
+      </div > `;
 
         modal.classList.remove('hidden');
 
@@ -4164,7 +4378,7 @@ ${roleName}：${item.cast.name}`;
       // ========= Cart Step1 / Step2 =========
       function renderCartStep1(modal) {
         modal.innerHTML = `
-      <div class="bg-white rounded-lg shadow-xl max-w-lg w-full p-6">
+          < div class="bg-white rounded-lg shadow-xl max-w-lg w-full p-6" >
         <div class="flex items-center justify-between mb-4">
           <h3 class="text-xl font-bold">STEP1：オーダー情報の入力</h3>
           <button id="cart-step1-close" class="text-gray-500 hover:text-gray-700">
@@ -4201,8 +4415,8 @@ ${roleName}：${item.cast.name}`;
             <button id="cart-step1-next" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">次へ</button>
           </div>
         </div>
-      </div>
-    `;
+      </div >
+          `;
         modal.classList.remove('hidden');
 
         // Restore file input if exists in memory (Note: file input value cannot be set programmatically for security, so we just keep the object in cartMeta)

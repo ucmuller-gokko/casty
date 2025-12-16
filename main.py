@@ -13,6 +13,9 @@ import gspread_asyncio
 from google.oauth2.service_account import Credentials
 import aiohttp
 
+test
+
+
 # --- 設定 ---
 load_dotenv()
 
@@ -231,7 +234,10 @@ def build_order_text(payload: OrderCreatedPayload) -> str:
             # Sort by rank
             candidates.sort(key=lambda x: x.rank)
             for cand in candidates:
-                lines.append(f"    第{cand.rank}候補：{cand.castName}")
+                cast_display = cand.castName
+                if cand.slack_user_id:
+                    cast_display = f"<@{cand.slack_user_id}>"
+                lines.append(f"    第{cand.rank}候補：{cast_display}")
         lines.append("") # Empty line between projects
 
 
@@ -317,12 +323,12 @@ async def get_config():
 
 @app.post("/api/notify/order_created")
 async def notify_order_created(
-    file: Optional[UploadFile] = File(None),
+    files: List[UploadFile] = File(None), 
     payload_str: str = Form(...)
 ):
     """
     新規オーダー（仮キャスティング）が作成されたことを Slack に通知する
-    PDFファイルが添付されている場合はスレッドにアップロードする
+    PDFファイルが添付されている場合はアップロードする（複数対応）
     """
     try:
         data = json.loads(payload_str)
@@ -342,12 +348,12 @@ async def notify_order_created(
     text = build_order_text(payload)
 
     try:
-        # chat.postMessage APIを呼び出す（スレッド親メッセージ）
-        # 追加オーダーの場合はスレッドに返信
+        # 1. Main Message (Text)
+        # 追加オーダー(payload.slackThreadTsあり)ならスレッドに、そうでなければチャンネルに送信
         response = await slack_client.chat_postMessage(
             channel=channel,
             text=text,
-            thread_ts=payload.slackThreadTs, # 追加: スレッド指定があれば返信になる
+            thread_ts=payload.slackThreadTs, 
             unfurl_links=False,
             unfurl_media=False,
         )
@@ -356,7 +362,7 @@ async def notify_order_created(
         if not ts:
             raise HTTPException(status_code=500, detail="Slackメッセージのタイムスタンプが取得できませんでした。")
 
-        # パーマリンクを取得
+        # Get Permalink
         permalink = ""
         try:
             perm_res = await slack_client.chat_getPermalink(channel=channel, message_ts=ts)
@@ -365,25 +371,33 @@ async def notify_order_created(
         except Exception as e:
             print(f"Failed to get permalink: {e}")
 
-        # PDFファイルがあればスレッドにアップロード
+        # 2. Upload Files (Multiple)
         upload_error = None
-        if file:
-            try:
-                # ファイルの中身を読み込む
-                file_content = await file.read()
-                
-                # files_upload_v2 を使用
-                await slack_client.files_upload_v2(
-                    channel=channel,
-                    thread_ts=ts,
-                    file=file_content,
-                    filename=file.filename,
-                    title="オーダー添付資料"
-                )
-            except Exception as e:
-                print(f"File upload failed: {e}")
-                upload_error = str(e)
-                # ファイルアップロード失敗はメインの失敗とはしないがログに残す
+        if files:
+            # 新規オーダーの場合: スレッド(ts)には入れず、チャンネルに流す (thread_ts=None)
+            # 追加オーダーの場合: 指定されたスレッド(payload.slackThreadTs)に入れる
+            file_thread_ts = payload.slackThreadTs if payload.slackThreadTs else None
+            
+            # files_upload_v2 は複数ファイルを一度にアップロードできます
+            file_uploads = []
+            for file in files:
+                content = await file.read()
+                file_uploads.append({
+                    "file": content,
+                    "filename": file.filename,
+                    "title": file.filename
+                })
+
+            if file_uploads:
+                try:
+                    await slack_client.files_upload_v2(
+                        channel=channel,
+                        thread_ts=file_thread_ts, 
+                        file_uploads=file_uploads
+                    )
+                except Exception as e:
+                    print(f"File upload failed: {e}")
+                    upload_error = str(e)
 
         return {"ok": True, "ts": ts, "permalink": permalink, "upload_error": upload_error}
 
