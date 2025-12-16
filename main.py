@@ -13,6 +13,9 @@ import gspread_asyncio
 from google.oauth2.service_account import Credentials
 import aiohttp
 
+test
+
+
 # --- 設定 ---
 load_dotenv()
 
