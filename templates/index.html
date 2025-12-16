@@ -12,6 +12,7 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     body {
@@ -154,7 +155,7 @@
         "https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest",
         "https://www.googleapis.com/discovery/v1/apis/oauth2/v2/rest"
       ];
-      const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/documents';
+      const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/documents';
 
       // ========= State =========
       let tokenClient, gapiInited = false, gisInited = false;
@@ -329,6 +330,16 @@
 
             if (tokenResponse.error) throw tokenResponse;
             localStorage.setItem('gapi_token', JSON.stringify(tokenResponse));
+            // Set Session Start Time if not present (or update on explicit login)
+            // Note: We only want to set this on *explicit* login or if missing.
+            // But here, this callback runs for both explicit and silent refresh.
+            // If we want "1 day from login", we should set it only if it's null?
+            // Or if we want "refresh extends session"? No, user said "1 day session".
+            // Let's set it if missing. If explicit login (prompt='consent'), we might want to reset it.
+            // For now, let's set it if missing.
+            if (!localStorage.getItem('session_start')) {
+              localStorage.setItem('session_start', Date.now());
+            }
             updateUI(true);
           },
         });
@@ -354,7 +365,28 @@
       function maybeCheckTokenAndLoad() {
         if (gapiInited && gisInited) {
           const stored = localStorage.getItem('gapi_token');
-          if (stored) { gapi.client.setToken(JSON.parse(stored)); updateUI(true); }
+          const sessionStart = localStorage.getItem('session_start');
+          const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+          if (stored && sessionStart) {
+            const elapsed = Date.now() - parseInt(sessionStart, 10);
+            if (elapsed > ONE_DAY_MS) {
+              console.log('Session expired (24h). Clearing token.');
+              handleSignoutClick();
+              showMessage('セッション有効期限（24時間）が切れました。再度サインインしてください。', 'warning');
+              return;
+            }
+            gapi.client.setToken(JSON.parse(stored));
+            updateUI(true);
+          }
+          else if (stored && !sessionStart) {
+            // Legacy session or first run with new code: Treat as new session or expire?
+            // Let's start a new session to be user friendly, or expire to be strict.
+            // User asked for "1 day session". Let's set start time now.
+            localStorage.setItem('session_start', Date.now());
+            gapi.client.setToken(JSON.parse(stored));
+            updateUI(true);
+          }
           else { updateUI(false); showLoader(false); }
         }
       }
@@ -392,11 +424,17 @@
           showLoader(false);
         }
       }
-      function handleAuthClick() { tokenClient?.requestAccessToken({ prompt: 'consent' }); }
+      function handleAuthClick() {
+        // Explicit login -> Reset session start
+        localStorage.setItem('session_start', Date.now());
+        tokenClient?.requestAccessToken({ prompt: 'consent' });
+      }
       function handleSignoutClick() {
         const token = gapi.client.getToken();
         if (token !== null) { google.accounts.oauth2.revoke(token.access_token, () => { }); gapi.client.setToken(''); }
+        if (token !== null) { google.accounts.oauth2.revoke(token.access_token, () => { }); gapi.client.setToken(''); }
         localStorage.removeItem('gapi_token');
+        localStorage.removeItem('session_start');
         updateUI(false); showMessage('サインアウトしました', 'info');
       }
       async function getUserProfile() {
@@ -2468,8 +2506,10 @@ ${rec.note || "なし"}
                 // Use FormData to send file and payload
                 const formData = new FormData();
                 formData.append('payload_str', JSON.stringify(payload));
-                if (cartMeta.pdfFile) {
-                  formData.append('file', cartMeta.pdfFile);
+                if (cartMeta.pdfFiles && cartMeta.pdfFiles.length > 0) {
+                  for (let i = 0; i < cartMeta.pdfFiles.length; i++) {
+                    formData.append('files', cartMeta.pdfFiles[i]);
+                  }
                 }
 
                 try {
@@ -2714,16 +2754,18 @@ ${roleName}：${item.cast.name}`;
       <div class="p-4">
         <h2 class="text-2xl font-bold mb-6 text-gray-800">撮影連絡管理</h2>
         
-        <!-- Tabs -->
-        <div class="flex space-x-1 border-b mb-6">
-            <button class="contact-tab px-4 py-2 font-medium text-sm rounded-t-lg border-b-2 transition-colors ${currentContactTab === '香盤連絡待ち' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'}" data-tab="香盤連絡待ち">
+        <div class="flex space-x-1 border-b mb-6 overflow-x-auto">
+            <button class="contact-tab px-4 py-2 font-medium text-sm rounded-t-lg border-b-2 transition-colors whitespace-nowrap ${currentContactTab === '香盤連絡待ち' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'}" data-tab="香盤連絡待ち">
                 1. 香盤連絡待ち
             </button>
-            <button class="contact-tab px-4 py-2 font-medium text-sm rounded-t-lg border-b-2 transition-colors ${currentContactTab === 'メイキング共有待ち' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'}" data-tab="メイキング共有待ち">
-                2. メイキング共有待ち
+            <button class="contact-tab px-4 py-2 font-medium text-sm rounded-t-lg border-b-2 transition-colors whitespace-nowrap ${currentContactTab === '発注書送信待ち' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'}" data-tab="発注書送信待ち">
+                2. 発注書送信待ち
             </button>
-            <button class="contact-tab px-4 py-2 font-medium text-sm rounded-t-lg border-b-2 transition-colors ${currentContactTab === '投稿日連絡待ち' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'}" data-tab="投稿日連絡待ち">
-                3. 投稿日連絡待ち
+            <button class="contact-tab px-4 py-2 font-medium text-sm rounded-t-lg border-b-2 transition-colors whitespace-nowrap ${currentContactTab === 'メイキング共有待ち' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'}" data-tab="メイキング共有待ち">
+                3. メイキング共有待ち
+            </button>
+            <button class="contact-tab px-4 py-2 font-medium text-sm rounded-t-lg border-b-2 transition-colors whitespace-nowrap ${currentContactTab === '投稿日連絡待ち' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'}" data-tab="投稿日連絡待ち">
+                4. 投稿日連絡待ち
             </button>
         </div>
 
@@ -2731,17 +2773,11 @@ ${roleName}：${item.cast.name}`;
         <div id="shoot-contact-container" class="overflow-x-auto"></div>
       </div>
     `;
-
-        // Tab Event Listeners
+        // Event Listeners
         view.querySelectorAll('.contact-tab').forEach(btn => {
-          btn.addEventListener('click', async (e) => {
-            currentContactTab = e.target.dataset.tab;
-            // Update Tab Styles
-            view.querySelectorAll('.contact-tab').forEach(b => {
-              const isActive = b.dataset.tab === currentContactTab;
-              b.className = `contact-tab px-4 py-2 font-medium text-sm rounded-t-lg border-b-2 transition-colors ${isActive ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`;
-            });
-            await loadShootingContactPage();
+          btn.addEventListener('click', () => {
+            currentContactTab = btn.dataset.tab;
+            showShootContactPage();
           });
         });
 
@@ -2906,7 +2942,11 @@ ${roleName}：${item.cast.name}`;
 
         if (currentContactTab === '香盤連絡待ち') {
           extraHeader = '<th class="px-2 py-2 text-left w-64">時間/場所</th>';
-          costHeader = '<th class="px-2 py-2 text-left w-24">金額</th>'; // P列相当
+          costHeader = '<th class="px-2 py-2 text-left w-24">金額</th>';
+        } else if (currentContactTab === '発注書送信待ち') {
+          // ★追加: 発注書送信待ち用のヘッダー（香盤連絡待ちと同様に見せる）
+          extraHeader = '<th class="px-2 py-2 text-left w-64">時間/場所</th>';
+          costHeader = '<th class="px-2 py-2 text-left w-24">金額</th>';
         } else if (currentContactTab === 'メイキング共有待ち') {
           extraHeader = '<th class="px-2 py-2 text-left">メイキングURL</th>';
         } else if (currentContactTab === '投稿日連絡待ち') {
@@ -2914,17 +2954,18 @@ ${roleName}：${item.cast.name}`;
         }
 
         let html = `
-        <table class="min-w-full text-sm">
-            <thead class="bg-gray-50 text-gray-700">
-                <tr>
-                    <th class="px-2 py-2 text-left">キャスト</th>
-                    <th class="px-2 py-2 text-left">役名</th>
-                    ${extraHeader}
-                    ${costHeader}
-                    <th class="px-2 py-2 text-center w-32">アクション</th>
-                </tr>
-            </thead>
-            <tbody class="divide-y divide-gray-100">
+        <table class="min-w-full bg-white border rounded-lg overflow-hidden">
+          <thead class="bg-gray-100 text-xs text-gray-500 uppercase">
+            <tr>
+              <th class="px-2 py-2 text-left">案件名 / 役名</th>
+              <th class="px-2 py-2 text-left">キャスト</th>
+              <th class="px-2 py-2 text-left">撮影日</th>
+              ${extraHeader}
+              ${costHeader}
+              <th class="px-2 py-2 text-center">アクション</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-200">
       `;
 
         items.forEach(item => {
@@ -2973,8 +3014,46 @@ ${roleName}：${item.cast.name}`;
                     onclick="saveShootingRow('${item.castingId}', this)">
                     💾 保存
                 </button>
+                ${mailBtn}
+            </div>`;
+
+          } else if (currentContactTab === '発注書送信待ち') {
+            // ★追加: 発注書送信待ちのロジック
+            // 香盤連絡待ちと同様に編集可能にする
+            extraCol = `
+            <td class="px-2 py-2 align-top">
+              <div class="flex flex-col gap-1">
+                <div class="flex items-center gap-1">
+                   <span class="text-xs text-gray-400 w-6">IN</span>
+                   <input type="text" class="shoot-in border rounded px-1 py-0.5 text-xs w-20 bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
+                          value="${item.inTime || ''}" placeholder="00:00">
+                </div>
+                <div class="flex items-center gap-1">
+                   <span class="text-xs text-gray-400 w-6">OUT</span>
+                   <input type="text" class="shoot-out border rounded px-1 py-0.5 text-xs w-20 bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
+                          value="${item.outTime || ''}" placeholder="00:00">
+                </div>
+                <input type="text" class="shoot-location border rounded px-1 py-0.5 text-xs w-full mt-1 bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
+                       value="${item.location || ''}" placeholder="場所">
+              </div>
+            </td>`;
+
+            costCol = `
+            <td class="px-2 py-2 align-top">
+              <input type="text" class="shoot-cost border rounded px-1 py-0.5 text-xs w-20 text-right bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
+                     value="${item.cost || ''}" placeholder="¥">
+            </td>`;
+
+            // アクションボタン: 保存、発注書作成、メール
+            // ★ここで openOrderDocModal を呼ぶように変更
+            actionBtns = `
+            <div class="flex flex-col gap-2 items-center">
+                <button class="px-2 py-1 bg-emerald-600 text-white rounded text-xs hover:bg-emerald-700 shadow-sm whitespace-nowrap w-full"
+                    onclick="saveShootingRow('${item.castingId}', this)">
+                    💾 保存
+                </button>
                 <button class="px-2 py-1 bg-indigo-600 text-white rounded text-xs hover:bg-indigo-700 shadow-sm whitespace-nowrap w-full"
-                    onclick="createOrderDoc('${item.castingId}')">
+                    onclick="openOrderDocModal('${item.castingId}')">
                     📄 発注書作成
                 </button>
                 ${mailBtn}
@@ -2982,24 +3061,32 @@ ${roleName}：${item.cast.name}`;
 
           } else if (currentContactTab === 'メイキング共有待ち') {
             extraCol = `<td class="px-2 py-2 text-xs text-blue-600 truncate max-w-xs"><a href="${item.makingUrl}" target="_blank">${item.makingUrl || '-'}</a></td>`;
+            costCol = `<td class="px-2 py-2 text-xs text-right">${item.cost || '-'}</td>`;
             actionBtns = mailBtn;
           } else if (currentContactTab === '投稿日連絡待ち') {
             extraCol = `<td class="px-2 py-2 text-xs">${item.postDate || '-'}</td>`;
+            costCol = `<td class="px-2 py-2 text-xs text-right">${item.cost || '-'}</td>`;
             actionBtns = mailBtn;
           }
 
           html += `
-            <tr class="hover:bg-gray-50" data-casting-id="${item.castingId}">
-                <td class="px-2 py-2 font-medium align-top">
-                    <div>${item.castName}</div>
-                    <div class="text-xs text-gray-400">(${item.castType})</div>
-                </td>
-                <td class="px-2 py-2 text-gray-600 align-top">${item.roleName}</td>
-                ${extraCol}
-                ${costCol}
-                <td class="px-2 py-2 text-center align-top">
-                     ${actionBtns}
-                </td>
+            <tr class="hover:bg-gray-50 transition-colors">
+              <td class="px-2 py-2 align-top">
+                <div class="font-bold text-sm text-gray-800">${item.projectName}</div>
+                <div class="text-xs text-gray-500">${item.roleName}</div>
+              </td>
+              <td class="px-2 py-2 align-top">
+                <div class="text-sm font-medium">${item.castName}</div>
+                <div class="text-xs text-gray-400">${item.agency || 'フリー'}</div>
+              </td>
+              <td class="px-2 py-2 align-top text-xs whitespace-nowrap">
+                ${item.date}
+              </td>
+              ${extraCol}
+              ${costCol}
+              <td class="px-2 py-2 align-top text-center">
+                ${actionBtns}
+              </td>
             </tr>
           `;
         });
@@ -3206,128 +3293,214 @@ ${roleName}：${item.cast.name}`;
         });
       }
 
-      window.createOrderDoc = async function (castingId) {
-        // 1. Auth & Scope Check (Pre-emptive to avoid popup block)
-        const token = gapi.client.getToken();
-        const requiredScopes = [
-          'https://www.googleapis.com/auth/drive.file',
-          'https://www.googleapis.com/auth/documents'
-        ];
-        const hasScopes = token && google.accounts.oauth2.hasGrantedAllScopes(token, ...requiredScopes);
+      // ========== PDF生成ロジック (Google Docs廃止版) ==========
 
-        if (!token || !hasScopes) {
-          // Save the action to retry after auth
-          tokenClient.callback = async (resp) => {
-            if (resp.error) {
-              console.error('Auth Error:', resp);
-              showMessage('権限の許可がキャンセルされました。', 'error');
-              return;
-            }
-            // Retry
-            showMessage('権限が更新されました。作成を開始します...', 'info');
-            await createOrderDoc(castingId);
-          };
-          // Request consent
-          tokenClient.requestAccessToken({ prompt: 'consent' });
-          return;
-        }
+      // 日本語フォントを読み込むためのヘルパー
+      async function loadJapaneseFont(doc) {
+        // 今回はhtml2canvas方式のため、この関数は実質未使用ですが、将来のために残します
+      }
 
-        // 2. Data Preparation
-        // 修正: castingId から window.shootingContactData (API結果) を検索
+      // ========== 発注書作成モーダル & PDF生成 ==========
+
+      // 1. モーダルを開く関数
+      window.openOrderDocModal = function (castingId) {
+        // データ取得
         let targetCasting = null;
         if (window.shootingContactData) {
           targetCasting = window.shootingContactData.find(item => item.castingId === castingId);
         }
-
-        // Fallback
         if (!targetCasting) {
           targetCasting = castingData.find(c => c.castingId === castingId);
         }
-
         if (!targetCasting) {
-          showMessage('対象のキャスティング情報が見つかりません。', 'error');
+          showMessage('対象データが見つかりません', 'error');
           return;
         }
 
-        const castName = targetCasting.castName || targetCasting.name || '不明';
-        const projectName = targetCasting.projectName || '不明';
-        const roleName = targetCasting.roleName || '不明';
-        const dateStr = targetCasting.date || targetCasting.startDate || '';
-        const cost = targetCasting.cost || '';
-        const note = targetCasting.note || '';
+        // 初期値セット
+        const data = {
+          date: new Date().toLocaleDateString(),
+          castName: targetCasting.castName || targetCasting.name || '',
+          project: targetCasting.projectName || '',
+          role: targetCasting.roleName || '',
+          shootDate: targetCasting.date || targetCasting.startDate || targetCasting.shootDate || '',
+          cost: targetCasting.cost || '',
+          note: targetCasting.note || ''
+        };
 
-        const TEMPLATE_ID = '1I7AMieD2gdGG-HQtyCQcs9I0JLbDrCIoeXGHqXVDK48';
-        const FOLDER_ID = '1-MLTouldn_rcOjJWFhJmS9zdO0K71isB';
+        const modal = document.getElementById('edit-modal'); // 既存の汎用モーダルを流用
+        if (!modal) return;
 
-        showLoader(true);
-        try {
-          const title = `${dateStr.replace(/\//g, '')}_${projectName}_${castName}_発注書`;
+        modal.innerHTML = `
+          <div class="bg-white rounded-lg shadow-xl max-w-lg w-full p-6">
+            <div class="flex justify-between items-center mb-4">
+              <h3 class="text-xl font-bold">発注書作成（編集）</h3>
+              <button onclick="document.getElementById('edit-modal').classList.add('hidden')" class="text-gray-500 hover:text-gray-700">&times;</button>
+            </div>
+            
+            <div class="space-y-3 text-sm">
+              <p class="text-xs text-gray-500">PDFに記載する内容を編集できます。</p>
+              
+              <div>
+                <label class="block font-bold text-gray-700">日付</label>
+                <input type="text" id="pdf-date" class="w-full border rounded p-2" value="${data.date}">
+              </div>
+              <div>
+                <label class="block font-bold text-gray-700">宛名（キャスト様）</label>
+                <input type="text" id="pdf-castname" class="w-full border rounded p-2" value="${data.castName}">
+              </div>
+              <div>
+                <label class="block font-bold text-gray-700">案件名</label>
+                <input type="text" id="pdf-project" class="w-full border rounded p-2" value="${data.project}">
+              </div>
+              <div>
+                <label class="block font-bold text-gray-700">役名</label>
+                <input type="text" id="pdf-role" class="w-full border rounded p-2" value="${data.role}">
+              </div>
+              <div>
+                <label class="block font-bold text-gray-700">撮影日</label>
+                <input type="text" id="pdf-shootdate" class="w-full border rounded p-2" value="${data.shootDate}">
+              </div>
+              <div>
+                <label class="block font-bold text-gray-700">金額</label>
+                <input type="text" id="pdf-cost" class="w-full border rounded p-2" value="${data.cost}" placeholder="数値のみ入力すると自動フォーマットされます">
+              </div>
+              <div>
+                <label class="block font-bold text-gray-700">備考</label>
+                <textarea id="pdf-note" class="w-full border rounded p-2" rows="3">${data.note}</textarea>
+              </div>
+            </div>
 
-          // 3. Copy Template via Drive API (fetch)
-          const copyRes = await fetch(`https://www.googleapis.com/drive/v3/files/${TEMPLATE_ID}/copy`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token.access_token}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              name: title,
-              parents: [FOLDER_ID]
-            })
-          });
+            <div class="mt-6 flex justify-end gap-3">
+              <button onclick="document.getElementById('edit-modal').classList.add('hidden')" class="px-4 py-2 border rounded hover:bg-gray-50">キャンセル</button>
+              <button id="btn-generate-pdf" class="px-6 py-2 bg-indigo-600 text-white font-bold rounded hover:bg-indigo-700">
+                PDFを作成
+              </button>
+            </div>
+          </div>
+        `;
 
-          if (!copyRes.ok) {
-            const err = await copyRes.json();
-            throw new Error(err.error?.message || 'Template Copy Failed');
-          }
-          const fileData = await copyRes.json();
-          const fileId = fileData.id;
+        modal.classList.remove('hidden');
 
-          // 4. Replace Placeholders via Docs API (fetch)
-          // Placeholders: {{日付}}, {{キャスト名}}, {{案件名}}, {{役名}}, {{撮影日}}, {{金額}}, {{備考}}
-          const replacements = {
-            '{{日付}}': new Date().toLocaleDateString(),
-            '{{キャスト名}}': castName,
-            '{{案件名}}': projectName,
-            '{{役名}}': roleName,
-            '{{撮影日}}': dateStr,
-            '{{金額}}': cost,
-            '{{備考}}': note
+        // 生成ボタンイベント
+        document.getElementById('btn-generate-pdf').addEventListener('click', () => {
+          const finalData = {
+            date: document.getElementById('pdf-date').value,
+            castName: document.getElementById('pdf-castname').value,
+            project: document.getElementById('pdf-project').value,
+            role: document.getElementById('pdf-role').value,
+            shootDate: document.getElementById('pdf-shootdate').value,
+            cost: document.getElementById('pdf-cost').value,
+            note: document.getElementById('pdf-note').value
           };
+          generatePDFFromData(finalData);
+          modal.classList.add('hidden');
+        });
+      };
 
-          const requests = Object.entries(replacements).map(([key, value]) => ({
-            replaceAllText: {
-              containsText: { text: key, matchCase: true },
-              replaceText: value || ''
-            }
-          }));
+      // 2. 実際のPDF生成処理（データを引数で受け取るように変更）
+      window.generatePDFFromData = async function (data) {
+        // 金額フォーマット
+        let costStr = data.cost;
+        const numCost = Number(data.cost.replace(/[^0-9]/g, ''));
+        if (numCost > 0 && !data.cost.includes('¥')) {
+          costStr = `¥${numCost.toLocaleString()}`;
+        }
 
-          const updateRes = await fetch(`https://docs.googleapis.com/v1/documents/${fileId}:batchUpdate`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token.access_token}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ requests })
-          });
+        const tempDiv = document.createElement('div');
+        tempDiv.style.width = '210mm';
+        tempDiv.style.minHeight = '297mm';
+        tempDiv.style.padding = '20mm';
+        tempDiv.style.backgroundColor = 'white';
+        tempDiv.style.color = 'black';
+        tempDiv.style.fontFamily = '"Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif';
+        tempDiv.style.position = 'fixed';
+        tempDiv.style.top = '-9999px';
+        tempDiv.style.left = '-9999px';
+        tempDiv.style.zIndex = '-100';
 
-          if (!updateRes.ok) {
-            const err = await updateRes.json();
-            throw new Error(err.error?.message || 'Docs BatchUpdate Failed');
-          }
+        tempDiv.innerHTML = `
+          <div style="text-align: right; margin-bottom: 40px;">${data.date}</div>
+          <h1 style="text-align: center; font-size: 24px; font-weight: bold; margin-bottom: 60px; border-bottom: 2px solid #000; padding-bottom: 10px;">発注書</h1>
+          
+          <div style="font-size: 16px; margin-bottom: 40px;">
+            <span style="font-weight: bold; font-size: 20px; border-bottom: 1px solid #000;">${data.castName} 様</span>
+          </div>
 
-          showMessage(`発注書を作成しました。\nフォルダに保存されました。`, 'success');
-          // Open the doc
-          window.open(`https://docs.google.com/document/d/${fileId}/edit`, '_blank');
+          <p style="margin-bottom: 30px;">以下の通り発注いたします。</p>
 
+          <table style="width: 100%; border-collapse: collapse; margin-bottom: 40px;">
+            <tr style="border-bottom: 1px solid #ccc;">
+              <td style="padding: 15px 5px; font-weight: bold; width: 120px;">案件名</td>
+              <td style="padding: 15px 5px;">${data.project}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #ccc;">
+              <td style="padding: 15px 5px; font-weight: bold;">役名</td>
+              <td style="padding: 15px 5px;">${data.role}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #ccc;">
+              <td style="padding: 15px 5px; font-weight: bold;">撮影日</td>
+              <td style="padding: 15px 5px;">${data.shootDate}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #ccc;">
+              <td style="padding: 15px 5px; font-weight: bold;">金額</td>
+              <td style="padding: 15px 5px;">${costStr}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #ccc;">
+              <td style="padding: 15px 5px; font-weight: bold;">備考</td>
+              <td style="padding: 15px 5px; white-space: pre-wrap;">${data.note}</td>
+            </tr>
+          </table>
+
+          <div style="margin-top: 50px; text-align: right;">
+            <p>株式会社GOKKO</p>
+          </div>
+        `;
+
+        document.body.appendChild(tempDiv);
+        showLoader(true);
+
+        try {
+          // html2canvas / jsPDF のロード確認
+          if (typeof html2canvas === 'undefined') await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
+          if (typeof window.jspdf === 'undefined') await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+
+          const canvas = await html2canvas(tempDiv, { scale: 2 });
+          const imgData = canvas.toDataURL('image/png');
+
+          const { jsPDF } = window.jspdf;
+          const pdf = new jsPDF('p', 'mm', 'a4');
+          const pdfWidth = pdf.internal.pageSize.getWidth();
+          const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+
+          pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+
+          const fileName = `${data.shootDate.replace(/[\/-]/g, '')}_${data.project}_${data.castName}_発注書.pdf`;
+          pdf.save(fileName);
+
+          showMessage('発注書PDFをダウンロードしました', 'success');
         } catch (e) {
           console.error(e);
-          showMessage('発注書の作成に失敗しました: ' + e.message, 'error');
+          showMessage('PDF作成に失敗しました: ' + e.message, 'error');
         } finally {
+          document.body.removeChild(tempDiv);
           showLoader(false);
         }
+      };
+
+      // 旧関数を削除または上書き
+      window.createOrderDoc = window.openOrderDocModal;
+
+      // スクリプト読み込みヘルパー
+      function loadScript(src) {
+        return new Promise((resolve, reject) => {
+          const s = document.createElement('script');
+          s.src = src;
+          s.onload = resolve;
+          s.onerror = reject;
+          document.head.appendChild(s);
+        });
       }
-        ;
 
       window.openShootMailModal = openShootMailModal;
       window.openShootStatusModal = openShootStatusModal;
@@ -3359,27 +3532,22 @@ ${roleName}：${item.cast.name}`;
 
         // Template Logic
         if (item.status === "香盤連絡待ち") {
-          subject = `【香盤連絡】${item.projectName} 撮影について`;
-          let costText = "";
-          if (item.cost) {
-            costText = `\n■金額\n¥${Number(item.cost).toLocaleString()}\n`;
-          }
-          body = `${item.castName} 様\n\nお世話になっております。\n株式会社GOKKOです。\n\n${item.projectName} の撮影詳細をお送りいたします。\n\n■日時\n${item.shootDate}\nIN: ${item.inTime || '未定'}\nOUT: ${item.outTime || '未定'}\n\n■場所\n${item.location || '未定'}\n${item.address || ''}\n${costText}\n■緊急連絡先\n${item.emergencyContact || ''}\n\n当日はよろしくお願いいたします。`;
+          subject = `【香盤連絡】${item.projectName}`;
+          body = `${item.castName} 様\n\nお世話になっております。\n株式会社GOKKOです。\n\n${item.projectName} の香盤をお送りいたします。\n\n日時：${item.date} ${item.inTime || '未定'}〜${item.outTime || '未定'}\n場所：${item.location || '未定'}\n\nご確認のほど、よろしくお願いいたします。`;
+        } else if (item.status === "発注書送信待ち") {
+          // ★追加: 発注書送付用のメールテンプレート
+          subject = `【発注書送付】${item.projectName}`;
+          body = `${item.castName} 様\n\nお世話になっております。\n株式会社GOKKOです。\n\n${item.projectName} の発注書をお送りいたします。\n添付ファイルをご確認のほど、よろしくお願いいたします。\n\n引き続きよろしくお願いいたします。`;
         } else if (item.status === "メイキング共有待ち") {
-          subject = `【オフショット共有】${item.projectName} 撮影の御礼`;
-          body = `${item.castName} 様\n\nお世話になっております。\n株式会社GOKKOです。\n\n先日は撮影お疲れ様でした！\n\n当日のオフショット・メイキング写真などがございましたら、\n下記URLまでご共有いただけますと幸いです。\n\n■共有URL\n${item.makingUrl || '(URL未設定)'}\n\n引き続きよろしくお願いいたします。`;
+          subject = `【メイキング共有】${item.projectName}`;
+          body = `${item.castName} 様\n\nお世話になっております。\n株式会社GOKKOです。\n\n${item.projectName} のメイキング映像が完成いたしました。\n以下のURLよりご確認いただけます。\n\n${item.makingUrl || '(URL)'}\n\nご確認のほど、よろしくお願いいたします。`;
         } else if (item.status === "投稿日連絡待ち") {
-          subject = `【公開のお知らせ】${item.projectName}`;
-          body = `${item.castName} 様\n\nお世話になっております。\n株式会社GOKKOです。\n\n出演いただいた作品が公開されました！\n\n■公開日\n${item.postDate || ''}\n\n■URL\n(URL)\n\nぜひSNS等で告知いただけますと幸いです。\nありがとうございました！`;
-        } else if (ORDER_WAIT_STATUSES.includes(item.status)) {
-          // ★ Order Wait -> Dashing (Offer) Template
-          subject = `【出演打診】${item.projectName}`;
-          let costText = "";
-          if (item.cost) {
-            costText = `\n■金額\n¥${Number(item.cost).toLocaleString()}\n`;
-          }
-          // Default Offer Body
-          body = `${item.castName} 様\n\nお世話になっております。\n株式会社GOKKOです。\n\n新規案件のご相談でご連絡いたしました。\n\n■案件名\n${item.projectName}\n\n■役名\n${item.roleName || ''}\n${costText}\n■撮影時期\n${item.shootDate || '未定'}\n\n■内容\n(詳細内容)\n\nご検討のほど、よろしくお願いいたします。`;
+          subject = `【投稿日連絡】${item.projectName}`;
+          body = `${item.castName} 様\n\nお世話になっております。\n株式会社GOKKOです。\n\n${item.projectName} の投稿日が決定いたしました。\n\n投稿日：${item.postDate || '(日付)'}\n\nご確認のほど、よろしくお願いいたします。`;
+        } else {
+          // Default
+          subject = `【連絡】${item.projectName}`;
+          body = `${item.castName} 様\n\nお世話になっております。\n株式会社GOKKOです。\n\n（本文）\n\nよろしくお願いいたします。`;
         }
 
         // Find email from castingData (Column U) - redundant if item is from castingData but safe
@@ -4408,7 +4576,7 @@ ${roleName}：${item.cast.name}`;
           </div>
           <div class="mb-6">
             <label class="block text-sm font-medium text-gray-700 mb-1">PDFファイル添付 (任意)</label>
-            <input type="file" id="cart-pdf-file" accept="application/pdf" class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+            <input type="file" id="cart-pdf-file" accept="application/pdf" multiple class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
             <p class="text-xs text-gray-500 mt-1">※Slack通知のスレッドにアップロードされます。</p>
           </div>
           <div class="flex justify-end">
@@ -4440,7 +4608,7 @@ ${roleName}：${item.cast.name}`;
           cartMeta.notionUrl = not;
 
           if (fileInput.files.length > 0) {
-            cartMeta.pdfFile = fileInput.files[0];
+            cartMeta.pdfFiles = fileInput.files;
           }
 
           // A-1: 組み合わせ作品名を生成
@@ -4701,6 +4869,7 @@ ${roleName}：${item.cast.name}`;
       document.head.appendChild(gapiScript);
       document.head.appendChild(gisScript); // ★ここを修正しました
     });
+
   </script>
 </body>
 

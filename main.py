@@ -209,7 +209,6 @@ def build_order_text(payload: OrderCreatedPayload) -> str:
     lines.append("`アカウント`")
     lines.append(payload.accountName or "未入力")
     lines.append("")
-    lines.append("")
 
     # Group by Project -> Role
     projects = {}
@@ -225,7 +224,10 @@ def build_order_text(payload: OrderCreatedPayload) -> str:
         projects[p_name][r_name].append(order)
 
     for p_name, roles in projects.items():
-        lines.append(f"【{p_name}】") # Project Name
+        lines.append("`作品名`")
+        lines.append(p_name)
+        lines.append("`役名`")
+        lines.append(f"【{p_name}】") # Keep the bracketed project name as per user request/current behavior
         for r_name, candidates in roles.items():
             lines.append(f"  {r_name}") # Role Name
             # Sort by rank
@@ -323,84 +325,132 @@ async def notify_order_created(
     files: List[UploadFile] = File(None), 
     payload_str: str = Form(...)
 ):
-    """
-    新規オーダー（仮キャスティング）が作成されたことを Slack に通知する
-    PDFファイルが添付されている場合はアップロードする（複数対応）
-    """
     try:
         data = json.loads(payload_str)
         payload = OrderCreatedPayload(**data)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid JSON payload")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Payload validation failed: {e}")
 
     if not SLACK_BOT_TOKEN or not slack_client:
-        raise HTTPException(status_code=500, detail="SlackのBOT TOKENが設定されていません。")
+        raise HTTPException(status_code=500, detail="Slack BOT TOKEN未設定")
 
     channel = pick_channel(payload.orderType)
-    if not channel:
-        raise HTTPException(status_code=500, detail="Slack通知先チャンネルが未設定です")
-
     text = build_order_text(payload)
 
     try:
-        # 1. Main Message (Text)
-        # 追加オーダー(payload.slackThreadTsあり)ならスレッドに、そうでなければチャンネルに送信
-        response = await slack_client.chat_postMessage(
-            channel=channel,
-            text=text,
-            thread_ts=payload.slackThreadTs, 
-            unfurl_links=False,
-            unfurl_media=False,
-        )
-
-        ts = response.get("ts")
-        if not ts:
-            raise HTTPException(status_code=500, detail="Slackメッセージのタイムスタンプが取得できませんでした。")
-
-        # Get Permalink
+        ts = None
         permalink = ""
-        try:
-            perm_res = await slack_client.chat_getPermalink(channel=channel, message_ts=ts)
-            if perm_res["ok"]:
-                permalink = perm_res["permalink"]
-        except Exception as e:
-            print(f"Failed to get permalink: {e}")
-
-        # 2. Upload Files (Multiple)
         upload_error = None
-        if files:
-            # 新規オーダーの場合: スレッド(ts)には入れず、チャンネルに流す (thread_ts=None)
-            # 追加オーダーの場合: 指定されたスレッド(payload.slackThreadTs)に入れる
-            file_thread_ts = payload.slackThreadTs if payload.slackThreadTs else None
-            
-            # files_upload_v2 は複数ファイルを一度にアップロードできます
-            file_uploads = []
-            for file in files:
-                content = await file.read()
-                file_uploads.append({
-                    "file": content,
-                    "filename": file.filename,
-                    "title": file.filename
-                })
 
-            if file_uploads:
+        # --- ファイルがある場合の処理 ---
+        if files and len(files) > 0:
+            target_thread_ts = payload.slackThreadTs if payload.slackThreadTs else None
+            
+            # ファイルが1つの場合（最も一般的なケース：より確実な方法で送信）
+            if len(files) == 1:
+                file = files[0]
+                content = await file.read()
                 try:
-                    await slack_client.files_upload_v2(
+                    response = await slack_client.files_upload_v2(
                         channel=channel,
-                        thread_ts=file_thread_ts, 
+                        thread_ts=target_thread_ts,
+                        initial_comment=text,  # メッセージ本体としてテキストを表示
+                        file=content,
+                        filename=file.filename,
+                        title=file.filename
+                    )
+                    # 成功時、ファイル投稿自体のtsを取得（v2のレスポンス構造に対応）
+                    if isinstance(response, dict):
+                        file_data = response.get("file")
+                        if file_data:
+                            # 単一ファイル投稿の場合、shares.public[channel_id][0].ts にメッセージTSがあることが多い
+                            shares = file_data.get("shares", {})
+                            if shares.get("public"):
+                                # 最初の共有先（今回のチャンネル）のTSを取得
+                                ts_list = shares["public"].get(channel, [])
+                                if ts_list:
+                                    ts = ts_list[0].get("ts")
+                        
+                        # 上記で取れなければトップレベルの ts を探す
+                        if not ts:
+                            ts = response.get("ts")
+                            
+                except Exception as e:
+                    print(f"Single file upload failed: {e}")
+                    upload_error = str(e)
+
+            # ファイルが複数の場合（リスト形式で送信）
+            else:
+                # 添付先のスレッドTS：
+                #  - 新規オーダーの場合: 今送ったメッセージ(ts)を親としてスレッドを作る
+                #  - 追加オーダーの場合: 既にスレッド内(target_thread_ts)にいるので、そこ(ts)にぶら下げる形
+                # ここでは「新規メッセージ(ts)に対してスレッドをぶら下げる」形をとります
+                upload_target_ts = ts
+
+                file_uploads = []
+                for file in files:
+                    content = await file.read()
+                    file_uploads.append({
+                        "file": content,
+                        "filename": file.filename,
+                    })
+
+                try:
+                    response = await slack_client.files_upload_v2(
+                        channel=channel,
+                        thread_ts=target_thread_ts,
+                        initial_comment=text,
                         file_uploads=file_uploads
                     )
+                    # 複数ファイルの場合のTS取得
+                    if isinstance(response, dict):
+                        ts = response.get("ts")
+                        
                 except Exception as e:
-                    print(f"File upload failed: {e}")
+                    print(f"Multi file upload failed: {e}")
                     upload_error = str(e)
+
+            # 万が一ファイルのアップロードに失敗した場合、テキストのみを送信してログを残す
+            if not ts and upload_error:
+                fallback_text = text + f"\n\n⚠️ ファイルの添付に失敗しました: {upload_error}"
+                response = await slack_client.chat_postMessage(
+                    channel=channel,
+                    text=fallback_text,
+                    thread_ts=payload.slackThreadTs
+                )
+                ts = response.get("ts")
+
+        # --- ファイルがない場合 ---
+        else:
+            response = await slack_client.chat_postMessage(
+                channel=channel,
+                text=text,
+                thread_ts=payload.slackThreadTs, 
+                unfurl_links=False,
+                unfurl_media=False,
+            )
+            ts = response.get("ts")
+
+        if not ts:
+            # TSが取れない場合は最低限のエラーレスポンスを返すが、処理自体は進める
+            print("Warning: Could not get ts from Slack response.")
+            # raise HTTPException(status_code=500, detail="Slack送信失敗（TS取得不可）")
+
+        # Permalink取得（TSがある場合のみ）
+        if ts:
+            try:
+                perm_res = await slack_client.chat_getPermalink(channel=channel, message_ts=ts)
+                if perm_res["ok"]:
+                    permalink = perm_res["permalink"]
+            except Exception as e:
+                print(f"Failed to get permalink: {e}")
 
         return {"ok": True, "ts": ts, "permalink": permalink, "upload_error": upload_error}
 
     except Exception as e:
-        print(f"An unexpected error occurred in order_created: {e}")
-        raise HTTPException(status_code=500, detail="予期せぬエラーが発生しました。")
+        print(f"Error in notify_order_created: {e}")
+        # クライアント側でエラーを表示できるよう詳細を返す
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/notify/status_update")
