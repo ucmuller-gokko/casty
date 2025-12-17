@@ -144,6 +144,20 @@
   </div>
   <div id="shoot-mail-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center modal-backdrop"></div>
 
+  <div id="progress-modal"
+    class="hidden fixed inset-0 z-[60] flex items-center justify-center modal-backdrop bg-black bg-opacity-50">
+    <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm text-center">
+      <h3 id="progress-title" class="text-lg font-bold text-gray-800 mb-2">処理中...</h3>
+      <p id="progress-message" class="text-sm text-gray-600 mb-4">しばらくお待ちください</p>
+
+      <div class="w-full bg-gray-200 rounded-full h-4 mb-2 overflow-hidden">
+        <div id="progress-bar-fill" class="bg-blue-600 h-4 rounded-full transition-all duration-300" style="width: 0%">
+        </div>
+      </div>
+      <div id="progress-percent" class="text-xs font-bold text-blue-600">0%</div>
+    </div>
+  </div>
+
   <script>
     document.addEventListener('DOMContentLoaded', () => {
       // ========= Config =========

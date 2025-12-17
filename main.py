@@ -325,14 +325,11 @@ async def notify_order_created(
     files: List[UploadFile] = File(None), 
     payload_str: str = Form(...)
 ):
-    # ■ 追加: 受信データのデバッグ出力
     print(f"--- Debug: Backend Received ---")
     if files:
         print(f"Files count: {len(files)}")
-        for f in files:
-            print(f" - Filename: {f.filename}, Content-Type: {f.content_type}")
     else:
-        print("⚠️ No files received (files list is empty or None)")
+        print("⚠️ No files received")
 
     try:
         data = json.loads(payload_str)
@@ -349,6 +346,9 @@ async def notify_order_created(
     ts = None
     permalink = ""
     upload_error = None
+    
+    # ★追加: PDF送信が成功したかどうかを判定するフラグ
+    is_file_sent = False 
 
     try:
         # ---------------------------------------------------------
@@ -357,10 +357,9 @@ async def notify_order_created(
         if files and len(files) > 0:
             print(f"Uploading {len(files)} files via upload_v2...")
 
-            # 複数ファイル送信用リストの作成
             upload_list = []
             for file in files:
-                await file.seek(0) # 読み込み位置をリセット
+                await file.seek(0)
                 content = await file.read()
                 upload_list.append({
                     "file": content,
@@ -369,37 +368,40 @@ async def notify_order_created(
                 })
 
             try:
-                # initial_comment にテキストを指定することで、
-                # 「本文 + 添付ファイル」の1つのメッセージとして送信されます
                 response = await slack_client.files_upload_v2(
                     channel=channel,
-                    initial_comment=text,      # メッセージ本文
-                    file_uploads=upload_list,  # 複数ファイルリスト
+                    initial_comment=text,
+                    file_uploads=upload_list,
                     thread_ts=payload.slackThreadTs if payload.slackThreadTs else None
                 )
+                
+                # ★ここを通ればSlackへの送信自体は成功している
+                is_file_sent = True 
 
-                # レスポンスからタイムスタンプ(ts)を特定する
-                if isinstance(response, dict):
-                    uploaded_files = response.get("files", [])
-                    # 最初のファイルの共有情報からtsを取得するのが確実
+                # タイムスタンプの取得（取得できなくても送信は成功しているのでエラーにはしない）
+                # Slack SDKのレスポンスは辞書型でない場合があるので .data や直接アクセスを試みる
+                data_resp = response.data if hasattr(response, 'data') else response
+                
+                if isinstance(data_resp, dict):
+                    uploaded_files = data_resp.get("files", [])
                     if uploaded_files:
                         shares = uploaded_files[0].get("shares", {}).get("public", {})
                         if channel in shares:
                             ts = shares[channel][0].get("ts")
                 
-                # 上記で特定できなかった場合の予備
-                if not ts:
-                    ts = response.get("ts")
+                if not ts and isinstance(data_resp, dict):
+                     ts = data_resp.get("ts")
 
             except Exception as e:
                 print(f"Slack upload failed: {e}")
                 upload_error = str(e)
-                # エラー時は ts が None のままなので、下のフォールバック処理へ進む
+                # ファイル送信に失敗した場合のみ、下のテキスト送信へ進むために is_file_sent は False のまま
 
         # ---------------------------------------------------------
         # パターンB: ファイルがない、またはアップロード失敗時 (chat.postMessage)
         # ---------------------------------------------------------
-        if not ts:
+        # ★修正: 「tsが無い」ではなく「ファイル送信が成功していない」場合に実行
+        if not is_file_sent:
             print("Sending text only (Fallback)...")
             final_text = text
             if upload_error:
