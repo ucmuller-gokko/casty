@@ -316,32 +316,38 @@
         tokenClient = google.accounts.oauth2.initTokenClient({
           client_id: CLIENT_ID, scope: SCOPES,
           callback: (tokenResponse) => {
-            if (window.authResolver) {
-              if (tokenResponse.error) {
-                window.authRejecter(tokenResponse);
-              } else {
-                localStorage.setItem('gapi_token', JSON.stringify(tokenResponse));
+            if (tokenResponse && tokenResponse.access_token) {
+              // ★追加: トークンをセットしてAPI呼び出しに備える
+              gapi.client.setToken(tokenResponse);
+              localStorage.setItem('gapi_granted', 'true');
+              showMessage('ログインしました', 'success');
+              // checkLoginStatus(); // This function is not defined in the provided context.
+              // Assuming checkLoginStatus() is meant to trigger updateUI(true) or similar.
+              // For now, let's call updateUI(true) directly if that's the intent.
+              // If it's for a specific login status check, it needs to be defined.
+              // Based on the original code, updateUI(true) is called after setting token.
+              // Let's keep the original flow for now, but ensure the token is set.
+
+              // Original logic for authResolver/authRejecter
+              if (window.authResolver) {
                 window.authResolver(tokenResponse);
               }
-              window.authResolver = null;
-              window.authRejecter = null;
-              return;
-            }
 
-            if (tokenResponse.error) throw tokenResponse;
-            localStorage.setItem('gapi_token', JSON.stringify(tokenResponse));
-            // Set Session Start Time if not present (or update on explicit login)
-            // Note: We only want to set this on *explicit* login or if missing.
-            // But here, this callback runs for both explicit and silent refresh.
-            // If we want "1 day from login", we should set it only if it's null?
-            // Or if we want "refresh extends session"? No, user said "1 day session".
-            // Let's set it if missing. If explicit login (prompt='consent'), we might want to reset it.
-            // For now, let's set it if missing.
-            if (!localStorage.getItem('session_start')) {
-              localStorage.setItem('session_start', Date.now());
+              if (tokenResponse.error) throw tokenResponse;
+              localStorage.setItem('gapi_token', JSON.stringify(tokenResponse));
+              // Set Session Start Time if not present (or update on explicit login)
+              // Note: We only want to set this on *explicit* login or if missing.
+              // But here, this callback runs for both explicit and silent refresh.
+              // If we want "1 day from login", we should set it only if it's null?
+              // Or if we want "refresh extends session"? No, user said "1 day session".
+              // Let's set it if missing. If explicit login (prompt='consent'), we might want to reset it.
+              // For now, let's set it if missing.
+              if (!localStorage.getItem('session_start')) {
+                localStorage.setItem('session_start', Date.now());
+              }
+              updateUI(true);
             }
-            updateUI(true);
-          },
+          }
         });
         gisInited = true; maybeCheckTokenAndLoad();
       }
@@ -2288,6 +2294,15 @@ ${rec.note || "なし"}
         }
       }
 
+
+
+      // Make handleAddToCart global
+      window.handleAddToCart = function (castId) {
+        addToCart(castId);
+        const modal = document.getElementById('cast-detail-modal');
+        if (modal) modal.remove();
+      };
+
       function addToCart(castId) {
         if (!castId) return;
         if (selectedDates.length === 0) {
@@ -2948,21 +2963,22 @@ ${roleName}：${item.cast.name}`;
           extraHeader = '<th class="px-2 py-2 text-left w-64">時間/場所</th>';
           costHeader = '<th class="px-2 py-2 text-left w-24">金額</th>';
         } else if (currentContactTab === 'メイキング共有待ち') {
-          extraHeader = '<th class="px-2 py-2 text-left">メイキングURL</th>';
+          extraHeader = '<th class="px-2 py-2 text-left w-24">メイキングURL</th>';
         } else if (currentContactTab === '投稿日連絡待ち') {
-          extraHeader = '<th class="px-2 py-2 text-left">投稿日</th>';
+          extraHeader = '<th class="px-2 py-2 text-left w-24">投稿日</th>';
         }
 
         let html = `
-        <table class="min-w-full bg-white border rounded-lg overflow-hidden">
+        <table class="min-w-full bg-white border rounded-lg overflow-hidden table-fixed">
           <thead class="bg-gray-100 text-xs text-gray-500 uppercase">
             <tr>
-              <th class="px-2 py-2 text-left">案件名 / 役名</th>
-              <th class="px-2 py-2 text-left">キャスト</th>
-              <th class="px-2 py-2 text-left">撮影日</th>
-              ${extraHeader}
-              ${costHeader}
-              <th class="px-2 py-2 text-center">アクション</th>
+              <th class="px-2 py-2 text-left w-48">案件名 / 役名</th>
+              <th class="px-2 py-2 text-left w-24">キャスト</th>
+              <th class="px-2 py-2 text-left w-12">M/S</th>
+              <th class="px-2 py-2 text-left w-24">日時/場所</th>
+              ${costHeader ? '<th class="px-2 py-2 text-left w-12">金額</th>' : ''}
+              ${!costHeader && extraHeader ? extraHeader : ''}
+              <th class="px-2 py-2 text-center w-20">アクション</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-gray-200">
@@ -2975,7 +2991,7 @@ ${roleName}：${item.cast.name}`;
 
           // メール作成ボタン（共通）
           const mailBtn = `
-            <button class="px-2 py-1 bg-blue-600 text-white rounded text-xs hover:bg-blue-700 shadow-sm whitespace-nowrap"
+            <button class="px-2 py-1 bg-blue-600 text-white rounded text-xs hover:bg-blue-700 shadow-sm whitespace-nowrap w-full"
                 onclick="openShootMailModal('${item.castingId}')">
                 ✉️ 作成
             </button>`;
@@ -2987,12 +3003,12 @@ ${roleName}：${item.cast.name}`;
               <div class="flex flex-col gap-1">
                 <div class="flex items-center gap-1">
                    <span class="text-xs text-gray-400 w-6">IN</span>
-                   <input type="text" class="shoot-in border rounded px-1 py-0.5 text-xs w-20 bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
+                   <input type="text" class="shoot-in border rounded px-1 py-0.5 text-xs w-full bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
                           value="${item.inTime || ''}" placeholder="00:00">
                 </div>
                 <div class="flex items-center gap-1">
                    <span class="text-xs text-gray-400 w-6">OUT</span>
-                   <input type="text" class="shoot-out border rounded px-1 py-0.5 text-xs w-20 bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
+                   <input type="text" class="shoot-out border rounded px-1 py-0.5 text-xs w-full bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
                           value="${item.outTime || ''}" placeholder="00:00">
                 </div>
                 <input type="text" class="shoot-location border rounded px-1 py-0.5 text-xs w-full mt-1 bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
@@ -3003,7 +3019,7 @@ ${roleName}：${item.cast.name}`;
             // 金額入力欄 (P列)
             costCol = `
             <td class="px-2 py-2 align-top">
-              <input type="text" class="shoot-cost border rounded px-1 py-0.5 text-xs w-20 text-right bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
+              <input type="text" class="shoot-cost border rounded px-1 py-0.5 text-xs w-full text-right bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
                      value="${item.cost || ''}" placeholder="¥">
             </td>`;
 
@@ -3025,12 +3041,12 @@ ${roleName}：${item.cast.name}`;
               <div class="flex flex-col gap-1">
                 <div class="flex items-center gap-1">
                    <span class="text-xs text-gray-400 w-6">IN</span>
-                   <input type="text" class="shoot-in border rounded px-1 py-0.5 text-xs w-20 bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
+                   <input type="text" class="shoot-in border rounded px-1 py-0.5 text-xs w-full bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
                           value="${item.inTime || ''}" placeholder="00:00">
                 </div>
                 <div class="flex items-center gap-1">
                    <span class="text-xs text-gray-400 w-6">OUT</span>
-                   <input type="text" class="shoot-out border rounded px-1 py-0.5 text-xs w-20 bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
+                   <input type="text" class="shoot-out border rounded px-1 py-0.5 text-xs w-full bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
                           value="${item.outTime || ''}" placeholder="00:00">
                 </div>
                 <input type="text" class="shoot-location border rounded px-1 py-0.5 text-xs w-full mt-1 bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
@@ -3040,12 +3056,11 @@ ${roleName}：${item.cast.name}`;
 
             costCol = `
             <td class="px-2 py-2 align-top">
-              <input type="text" class="shoot-cost border rounded px-1 py-0.5 text-xs w-20 text-right bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
+              <input type="text" class="shoot-cost border rounded px-1 py-0.5 text-xs w-full text-right bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
                      value="${item.cost || ''}" placeholder="¥">
             </td>`;
 
             // アクションボタン: 保存、発注書作成、メール
-            // ★ここで openOrderDocModal を呼ぶように変更
             actionBtns = `
             <div class="flex flex-col gap-2 items-center">
                 <button class="px-2 py-1 bg-emerald-600 text-white rounded text-xs hover:bg-emerald-700 shadow-sm whitespace-nowrap w-full"
@@ -3054,7 +3069,7 @@ ${roleName}：${item.cast.name}`;
                 </button>
                 <button class="px-2 py-1 bg-indigo-600 text-white rounded text-xs hover:bg-indigo-700 shadow-sm whitespace-nowrap w-full"
                     onclick="openOrderDocModal('${item.castingId}')">
-                    📄 発注書作成
+                    📄 発注書
                 </button>
                 ${mailBtn}
             </div>`;
@@ -3070,20 +3085,20 @@ ${roleName}：${item.cast.name}`;
           }
 
           html += `
-            <tr class="hover:bg-gray-50 transition-colors">
+            <tr class="hover:bg-gray-50">
               <td class="px-2 py-2 align-top">
-                <div class="font-bold text-sm text-gray-800">${item.projectName}</div>
+                <div class="text-sm font-bold text-gray-900">${item.projectName}</div>
                 <div class="text-xs text-gray-500">${item.roleName}</div>
               </td>
               <td class="px-2 py-2 align-top">
-                <div class="text-sm font-medium">${item.castName}</div>
-                <div class="text-xs text-gray-400">${item.agency || 'フリー'}</div>
+                <div class="text-sm text-gray-900">${item.castName}</div>
               </td>
-              <td class="px-2 py-2 align-top text-xs whitespace-nowrap">
-                ${item.date}
+              <td class="px-2 py-2 align-top">
+                <div class="text-xs text-gray-500">${item.mainSub || '-'}</div>
               </td>
-              ${extraCol}
-              ${costCol}
+              ${extraCol ? extraCol : `<td class="px-2 py-2 align-top text-sm text-gray-500">${item.date}</td>`}
+              ${costCol ? costCol : (costHeader ? `<td class="px-2 py-2 align-top text-sm text-gray-500">${item.cost || ''}</td>` : '')}
+              ${!costHeader && extraHeader ? `<td class="px-2 py-2 align-top text-sm text-gray-500">${item.makingUrl || item.postDate || ''}</td>` : ''}
               <td class="px-2 py-2 align-top text-center">
                 ${actionBtns}
               </td>
@@ -3276,7 +3291,7 @@ ${roleName}：${item.cast.name}`;
                </div>
 
                <div class="mt-auto">
-                 <button onclick="addToCart('${cast.castId}'); document.getElementById('cast-detail-modal').remove();" 
+                 <button onclick="handleAddToCart('${cast.castId}')" 
                    class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg shadow transition ${disabled ? 'opacity-50 cursor-not-allowed' : ''}" ${disabled ? 'disabled' : ''}>
                    ${btnText}
                  </button>
@@ -3398,6 +3413,18 @@ ${roleName}：${item.cast.name}`;
         });
       };
 
+
+
+      // 季節の挨拶を取得する関数
+      function getSeasonalGreeting() {
+        const month = new Date().getMonth() + 1;
+        const greetings = {
+          1: "初春", 2: "晩冬", 3: "早春", 4: "陽春", 5: "新緑", 6: "初夏",
+          7: "盛夏", 8: "晩夏", 9: "初秋", 10: "秋冷", 11: "晩秋", 12: "初冬"
+        };
+        return greetings[month] || "時下";
+      }
+
       // 2. 実際のPDF生成処理（データを引数で受け取るように変更）
       window.generatePDFFromData = async function (data) {
         // 金額フォーマット
@@ -3418,42 +3445,71 @@ ${roleName}：${item.cast.name}`;
         tempDiv.style.top = '-9999px';
         tempDiv.style.left = '-9999px';
         tempDiv.style.zIndex = '-100';
+        // ★修正: 線が入る問題を防ぐ
+        tempDiv.style.textDecoration = 'none';
+
+        const greeting = getSeasonalGreeting();
 
         tempDiv.innerHTML = `
-          <div style="text-align: right; margin-bottom: 40px;">${data.date}</div>
-          <h1 style="text-align: center; font-size: 24px; font-weight: bold; margin-bottom: 60px; border-bottom: 2px solid #000; padding-bottom: 10px;">発注書</h1>
-          
-          <div style="font-size: 16px; margin-bottom: 40px;">
-            <span style="font-weight: bold; font-size: 20px; border-bottom: 1px solid #000;">${data.castName} 様</span>
-          </div>
+          <div style="text-decoration: none !important; font-size: 14px; line-height: 1.6;">
+            <h1 style="text-align: center; font-size: 20px; font-weight: bold; margin-bottom: 30px;">GOKKO倶楽部出演発注書</h1>
+            
+            <div style="text-align: right; margin-bottom: 20px;">${data.date}</div>
+            
+            <div style="font-size: 14px; margin-bottom: 20px;">
+              <span style="font-size: 14px; border-bottom: 1px solid #000;">${data.castName} 様</span>
+            </div>
 
-          <p style="margin-bottom: 30px;">以下の通り発注いたします。</p>
+            <p style="margin-bottom: 5px;">拝啓</p>
+            <p style="margin-bottom: 5px;">${greeting}の候、貴社におかれましては益々ご清栄のこととお慶び申し上げます。<br>
+            平素は格別のご高配を賜り、厚く御礼申し上げます。</p>
+            <p style="margin-bottom: 5px;">ご快諾いただきましたドラマ出演の件につきまして、下記の通り発注申し上げます。<br>
+            内容をご確認いただき、ご不明な点がございましたら担当までご連絡ください。<br>
+            本作品へのご出演、心より感謝申し上げます。</p>
+            <p style="text-align: right; margin-bottom: 20px;">敬具</p>
 
-          <table style="width: 100%; border-collapse: collapse; margin-bottom: 40px;">
-            <tr style="border-bottom: 1px solid #ccc;">
-              <td style="padding: 15px 5px; font-weight: bold; width: 120px;">案件名</td>
-              <td style="padding: 15px 5px;">${data.project}</td>
-            </tr>
-            <tr style="border-bottom: 1px solid #ccc;">
-              <td style="padding: 15px 5px; font-weight: bold;">役名</td>
-              <td style="padding: 15px 5px;">${data.role}</td>
-            </tr>
-            <tr style="border-bottom: 1px solid #ccc;">
-              <td style="padding: 15px 5px; font-weight: bold;">撮影日</td>
-              <td style="padding: 15px 5px;">${data.shootDate}</td>
-            </tr>
-            <tr style="border-bottom: 1px solid #ccc;">
-              <td style="padding: 15px 5px; font-weight: bold;">金額</td>
-              <td style="padding: 15px 5px;">${costStr}</td>
-            </tr>
-            <tr style="border-bottom: 1px solid #ccc;">
-              <td style="padding: 15px 5px; font-weight: bold;">備考</td>
-              <td style="padding: 15px 5px; white-space: pre-wrap;">${data.note}</td>
-            </tr>
-          </table>
+            <div style="margin-bottom: 20px; padding: 10px; width: 100%;">
+              <p style="font-weight: bold; margin-bottom: 5px;">【発注元】</p>
+              <p style="margin: 0;">〒135-0091</p>
+              <p style="margin: 0;">東京都港区台場2-3-1トレードピアお台場12F</p>
+              <p style="margin: 0;">株式会社GOKKO</p>
+              <p style="margin: 0;">担当：GOKKO倶楽部キャスティング担当</p>
+            </div>
 
-          <div style="margin-top: 50px; text-align: right;">
-            <p>株式会社GOKKO</p>
+            <div style="margin-bottom: 20px;">
+              <p style="font-weight: bold; border-bottom: 1px solid #000; display: inline-block; margin-bottom: 10px;">【お取引条件】</p>
+              <p style="margin: 2px 0;">支払条件： 月末締め翌月末払い</p>
+              <p style="margin: 2px 0;">支払方法： ご指定の銀行口座へお振込み</p>
+              <p style="margin: 2px 0;">源泉徴収： [例：有・無（必要な場合はマイナンバーをご提出ください）]</p>
+              <p style="margin: 2px 0;">秘密保持： 本件に関わる脚本内容、撮影情報、共演者情報等は、公式解禁まで第三者への漏洩（SNS含む）を禁止とさせていただきます。</p>
+              <p style="text-align: right; margin: 0;">以上</p>
+            </div>
+
+            <div style="text-align: center; margin-bottom: 20px; font-weight: bold;">記</div>
+
+            <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+              <tr style="border: 1px solid #000;">
+                <th style="border: 1px solid #000; padding: 8px; background-color: #f0f0f0; width: 30%; text-align: center;">項目</th>
+                <th style="border: 1px solid #000; padding: 8px; background-color: #f0f0f0; text-align: center;">内容</th>
+              </tr>
+              <tr style="border: 1px solid #000;">
+                <td style="border: 1px solid #000; padding: 8px; text-align: center;">案件名</td>
+                <td style="border: 1px solid #000; padding: 8px;">${data.project}</td>
+              </tr>
+              <tr style="border: 1px solid #000;">
+                <td style="border: 1px solid #000; padding: 8px; text-align: center;">役名</td>
+                <td style="border: 1px solid #000; padding: 8px;">${data.role}</td>
+              </tr>
+              <tr style="border: 1px solid #000;">
+                <td style="border: 1px solid #000; padding: 8px; text-align: center;">撮影日</td>
+                <td style="border: 1px solid #000; padding: 8px;">${data.shootDate}</td>
+              </tr>
+              <tr style="border: 1px solid #000;">
+                <td style="border: 1px solid #000; padding: 8px; text-align: center;">出演料（金額）</td>
+                <td style="border: 1px solid #000; padding: 8px;">${costStr} （税別・税込）</td>
+              </tr>
+            </table>
+
           </div>
         `;
 
@@ -3552,7 +3608,9 @@ ${roleName}：${item.cast.name}`;
 
         // Find email from castingData (Column U) - redundant if item is from castingData but safe
         const originalRec = castingData.find(c => c.castingId === castingId);
-        const castEmail = originalRec?.email || item.email || ""; // Fallback to item.email if available
+        // ★修正: キャストDBからも検索してフォールバック
+        const castInfo = castData.find(c => c.castId === (originalRec?.castId || item.castId));
+        const castEmail = originalRec?.email || item.email || castInfo?.email || "";
 
         modal.innerHTML = `
         <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full p-6">
@@ -3607,6 +3665,8 @@ ${roleName}：${item.cast.name}`;
           if (isCastingItem && ORDER_WAIT_STATUSES.includes(currentStatus)) {
             nextStatus = "打診中";
           } else if (currentStatus === "香盤連絡待ち") {
+            nextStatus = "発注書送信待ち";
+          } else if (currentStatus === "発注書送信待ち") {
             nextStatus = "メイキング共有待ち";
           } else if (currentStatus === "メイキング共有待ち") {
             nextStatus = "投稿日連絡待ち";
@@ -3757,6 +3817,14 @@ ${roleName}：${item.cast.name}`;
           return;
         }
 
+        // ■■■ 追加: 画面更新前にファイルを退避 ■■■
+        const fileInput = document.getElementById('order-pdf-file');
+        if (fileInput && fileInput.files.length > 0) {
+          cartMeta.pdfFiles = fileInput.files;
+          console.log("Files saved to memory:", cartMeta.pdfFiles.length);
+        }
+        // ■■■ 追加ここまで ■■■
+
         // Cleanup: 役名などが空の無効なデータを掃除
         cartProjects = cartProjects.map(p => {
           const validRoles = p.roles.filter(r => r.name.trim() && r.castIds.length > 0);
@@ -3889,6 +3957,32 @@ ${roleName}：${item.cast.name}`;
         if (modal) modal.classList.add('hidden');
       }
 
+      // Progress Bar Functions
+      function showProgressBar(message = "処理中...", percent = 0) {
+        const modal = document.getElementById('progress-modal');
+        if (modal) {
+          modal.classList.remove('hidden');
+          updateProgressBar(message, percent);
+        }
+      }
+
+      function updateProgressBar(message, percent) {
+        const titleEl = document.getElementById('progress-title');
+        const msgEl = document.getElementById('progress-message');
+        const barEl = document.getElementById('progress-bar-fill');
+        const percentEl = document.getElementById('progress-percent');
+
+        if (titleEl) titleEl.textContent = "処理中..."; // Or dynamic title
+        if (msgEl) msgEl.textContent = message;
+        if (barEl) barEl.style.width = `${percent}%`;
+        if (percentEl) percentEl.textContent = `${percent}%`;
+      }
+
+      function hideProgressBar() {
+        const modal = document.getElementById('progress-modal');
+        if (modal) modal.classList.add('hidden');
+      }
+
       // モーダルから呼ばれるラッパー関数
       async function processNewOrderFromModal(options) {
         const teamName = selectedShooting ? selectedShooting.team : (currentUser?.name || '不明');
@@ -3908,7 +4002,9 @@ ${roleName}：${item.cast.name}`;
           if (ccIds.size > 0) ccString = Array.from(ccIds).map(uid => `<@${uid}>`).join(' ');
         }
 
-        showLoader(true);
+        // showLoader(true); // Disable global loader in favor of progress bar
+        showProgressBar("処理を開始します...", 10);
+
         try {
           await processNewOrder({
             accountName: teamName,
@@ -3920,6 +4016,9 @@ ${roleName}：${item.cast.name}`;
             // ★追加オプション
             intimacy: options.intimacy
           });
+
+          updateProgressBar("完了しました", 100);
+          await new Promise(r => setTimeout(r, 500)); // Show 100% briefly
 
           closeCartModal();
           closeConfirmationModal(); // モーダルも閉じる
@@ -3944,7 +4043,8 @@ ${roleName}：${item.cast.name}`;
             showMessage('オーダー送信に失敗しました: ' + (e.message || 'Unknown error'), 'error');
           }
         } finally {
-          showLoader(false);
+          // showLoader(false);
+          hideProgressBar();
         }
       }
 
@@ -4010,8 +4110,15 @@ ${roleName}：${item.cast.name}`;
         };
 
         // PDF Upload - Multiple Files Support
-        const fileInput = document.getElementById('order-pdf-file');
-        const files = fileInput?.files;
+        // ■■■ 修正: 退避したファイル情報を使用 ■■■
+        // まず退避データを確認し、なければDOMから取得（フォールバック）
+        let files = cartMeta.pdfFiles;
+
+        if (!files || files.length === 0) {
+          const fileInput = document.getElementById('order-pdf-file');
+          files = fileInput?.files;
+        }
+        // ■■■ 修正ここまで ■■■
 
         const formData = new FormData();
         formData.append('payload_str', JSON.stringify(payload));
@@ -4019,12 +4126,27 @@ ${roleName}：${item.cast.name}`;
         // 【修正】複数ファイルをループしてFormDataに追加
         if (files && files.length > 0) {
           for (let i = 0; i < files.length; i++) {
-            formData.append('files', files[i]);
+            formData.append('files', files[i], files[i].name);
           }
         }
 
+        // ■ 追加: デバッグ用ログ出力（コンソールで確認用）
+        console.log("--- Debug: FormData Sending Check ---");
+        let fileCount = 0;
+        for (let pair of formData.entries()) {
+          if (pair[0] === 'files') {
+            fileCount++;
+            console.log(`Key: ${pair[0]}, File: ${pair[1].name}, Size: ${pair[1].size}`);
+          } else {
+            console.log(`Key: ${pair[0]}, Value: [Payload String]`);
+          }
+        }
+        if (fileCount === 0) console.warn("⚠️ FormDataにファイルが含まれていません！");
+
         let slackThreadTs = '';
         let slackPermalink = '';
+
+        updateProgressBar("Slackに通知を送信中...", 30);
 
         try {
           const slackRes = await fetch('/api/notify/order_created', {
@@ -4038,10 +4160,13 @@ ${roleName}：${item.cast.name}`;
           slackThreadTs = data.slackThreadTs || slackData.ts;
           slackPermalink = slackData.permalink;
         } catch (e) {
-          console.error("Slack Send Error:", e);
-          showMessage('Slack通知に失敗しましたが、シートへの保存は続行します。', 'error');
+          console.error("Slack notification error:", e);
+          // Slack失敗でもシート書き込みは続行する方針なら続行、そうでなければthrow
+          // ここでは続行しつつエラー表示などのハンドリングが望ましいが、
+          // 既存ロジックに合わせて続行します。
         }
 
+        updateProgressBar("スプレッドシートに書き込み中...", 60);
         // 3. Prepare Sheet Rows (以下、既存コードと同様)
         const newRows = [];
         const castGroups = new Map();

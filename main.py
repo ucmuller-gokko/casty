@@ -325,6 +325,15 @@ async def notify_order_created(
     files: List[UploadFile] = File(None), 
     payload_str: str = Form(...)
 ):
+    # ■ 追加: 受信データのデバッグ出力
+    print(f"--- Debug: Backend Received ---")
+    if files:
+        print(f"Files count: {len(files)}")
+        for f in files:
+            print(f" - Filename: {f.filename}, Content-Type: {f.content_type}")
+    else:
+        print("⚠️ No files received (files list is empty or None)")
+
     try:
         data = json.loads(payload_str)
         payload = OrderCreatedPayload(**data)
@@ -337,106 +346,75 @@ async def notify_order_created(
     channel = pick_channel(payload.orderType)
     text = build_order_text(payload)
 
+    ts = None
+    permalink = ""
+    upload_error = None
+
     try:
-        ts = None
-        permalink = ""
-        upload_error = None
-
-        # --- ファイルがある場合の処理 ---
+        # ---------------------------------------------------------
+        # パターンA: ファイルがある場合 (files.upload_v2 で一括送信)
+        # ---------------------------------------------------------
         if files and len(files) > 0:
-            target_thread_ts = payload.slackThreadTs if payload.slackThreadTs else None
-            
-            # ファイルが1つの場合（最も一般的なケース：より確実な方法で送信）
-            if len(files) == 1:
-                file = files[0]
+            print(f"Uploading {len(files)} files via upload_v2...")
+
+            # 複数ファイル送信用リストの作成
+            upload_list = []
+            for file in files:
+                await file.seek(0) # 読み込み位置をリセット
                 content = await file.read()
-                try:
-                    response = await slack_client.files_upload_v2(
-                        channel=channel,
-                        thread_ts=target_thread_ts,
-                        initial_comment=text,  # メッセージ本体としてテキストを表示
-                        file=content,
-                        filename=file.filename,
-                        title=file.filename
-                    )
-                    # 成功時、ファイル投稿自体のtsを取得（v2のレスポンス構造に対応）
-                    if isinstance(response, dict):
-                        file_data = response.get("file")
-                        if file_data:
-                            # 単一ファイル投稿の場合、shares.public[channel_id][0].ts にメッセージTSがあることが多い
-                            shares = file_data.get("shares", {})
-                            if shares.get("public"):
-                                # 最初の共有先（今回のチャンネル）のTSを取得
-                                ts_list = shares["public"].get(channel, [])
-                                if ts_list:
-                                    ts = ts_list[0].get("ts")
-                        
-                        # 上記で取れなければトップレベルの ts を探す
-                        if not ts:
-                            ts = response.get("ts")
-                            
-                except Exception as e:
-                    print(f"Single file upload failed: {e}")
-                    upload_error = str(e)
+                upload_list.append({
+                    "file": content,
+                    "filename": file.filename,
+                    "title": file.filename
+                })
 
-            # ファイルが複数の場合（リスト形式で送信）
-            else:
-                # 添付先のスレッドTS：
-                #  - 新規オーダーの場合: 今送ったメッセージ(ts)を親としてスレッドを作る
-                #  - 追加オーダーの場合: 既にスレッド内(target_thread_ts)にいるので、そこ(ts)にぶら下げる形
-                # ここでは「新規メッセージ(ts)に対してスレッドをぶら下げる」形をとります
-                upload_target_ts = ts
-
-                file_uploads = []
-                for file in files:
-                    content = await file.read()
-                    file_uploads.append({
-                        "file": content,
-                        "filename": file.filename,
-                    })
-
-                try:
-                    response = await slack_client.files_upload_v2(
-                        channel=channel,
-                        thread_ts=target_thread_ts,
-                        initial_comment=text,
-                        file_uploads=file_uploads
-                    )
-                    # 複数ファイルの場合のTS取得
-                    if isinstance(response, dict):
-                        ts = response.get("ts")
-                        
-                except Exception as e:
-                    print(f"Multi file upload failed: {e}")
-                    upload_error = str(e)
-
-            # 万が一ファイルのアップロードに失敗した場合、テキストのみを送信してログを残す
-            if not ts and upload_error:
-                fallback_text = text + f"\n\n⚠️ ファイルの添付に失敗しました: {upload_error}"
-                response = await slack_client.chat_postMessage(
+            try:
+                # initial_comment にテキストを指定することで、
+                # 「本文 + 添付ファイル」の1つのメッセージとして送信されます
+                response = await slack_client.files_upload_v2(
                     channel=channel,
-                    text=fallback_text,
-                    thread_ts=payload.slackThreadTs
+                    initial_comment=text,      # メッセージ本文
+                    file_uploads=upload_list,  # 複数ファイルリスト
+                    thread_ts=payload.slackThreadTs if payload.slackThreadTs else None
                 )
-                ts = response.get("ts")
 
-        # --- ファイルがない場合 ---
-        else:
+                # レスポンスからタイムスタンプ(ts)を特定する
+                if isinstance(response, dict):
+                    uploaded_files = response.get("files", [])
+                    # 最初のファイルの共有情報からtsを取得するのが確実
+                    if uploaded_files:
+                        shares = uploaded_files[0].get("shares", {}).get("public", {})
+                        if channel in shares:
+                            ts = shares[channel][0].get("ts")
+                
+                # 上記で特定できなかった場合の予備
+                if not ts:
+                    ts = response.get("ts")
+
+            except Exception as e:
+                print(f"Slack upload failed: {e}")
+                upload_error = str(e)
+                # エラー時は ts が None のままなので、下のフォールバック処理へ進む
+
+        # ---------------------------------------------------------
+        # パターンB: ファイルがない、またはアップロード失敗時 (chat.postMessage)
+        # ---------------------------------------------------------
+        if not ts:
+            print("Sending text only (Fallback)...")
+            final_text = text
+            if upload_error:
+                final_text += f"\n\n⚠️ ファイル添付エラー: {upload_error}"
+
             response = await slack_client.chat_postMessage(
                 channel=channel,
-                text=text,
-                thread_ts=payload.slackThreadTs, 
+                text=final_text,
+                thread_ts=payload.slackThreadTs,
                 unfurl_links=False,
                 unfurl_media=False,
             )
             ts = response.get("ts")
 
-        if not ts:
-            # TSが取れない場合は最低限のエラーレスポンスを返すが、処理自体は進める
-            print("Warning: Could not get ts from Slack response.")
-            # raise HTTPException(status_code=500, detail="Slack送信失敗（TS取得不可）")
-
-        # Permalink取得（TSがある場合のみ）
+        # --- Permalink取得 (tsがある場合) ---
         if ts:
             try:
                 perm_res = await slack_client.chat_getPermalink(channel=channel, message_ts=ts)
@@ -449,7 +427,6 @@ async def notify_order_created(
 
     except Exception as e:
         print(f"Error in notify_order_created: {e}")
-        # クライアント側でエラーを表示できるよう詳細を返す
         raise HTTPException(status_code=500, detail=str(e))
 
 
