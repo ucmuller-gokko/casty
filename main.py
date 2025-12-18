@@ -12,6 +12,7 @@ from slack_sdk.errors import SlackApiError
 import gspread_asyncio
 from google.oauth2.service_account import Credentials
 import aiohttp
+from datetime import datetime
 
 # --- 設定 ---
 load_dotenv()
@@ -431,6 +432,227 @@ async def notify_order_created(
         print(f"Error in notify_order_created: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# --- Special Order (External/Internal) ---
+# --- Special Order (External/Internal) ---
+class SpecialOrderPayload(BaseModel):
+    orderType: Literal["external", "internal"]
+    title: str
+    dates: List[str] # Changed from date to dates
+    startTime: str
+    endTime: str
+    castIds: List[str]
+    ordererEmail: str
+
+@app.post("/api/notify/special_order")
+async def notify_special_order(payload: SpecialOrderPayload):
+    if not SLACK_BOT_TOKEN or not slack_client:
+        raise HTTPException(status_code=500, detail="Slack BOT TOKEN未設定")
+
+    try:
+        creds = get_creds()
+        agcm = gspread_asyncio.AsyncioGspreadClientManager(lambda: creds)
+        gc = await agcm.authorize()
+        sh = await gc.open_by_key(SPREADSHEET_ID)
+        ws = await sh.worksheet("キャスティングリスト")
+
+        # --- キャスト情報取得 (安全なマッチングのためIDは文字列化・strip) ---
+        cast_map = {}
+        email_to_slack_map = {}
+
+        # 1. 内部キャストDB (CC用マップ作成 & 内部キャスト判定)
+        try:
+            internal_ws = await sh.worksheet("内部キャストDB")
+            internal_rows = await internal_ws.get_all_values()
+            # ヘッダー除外
+            for row in internal_rows[1:]:
+                # D列(3)=Email, E列(4)=SlackID, A列(0)=Name
+                if len(row) < 5: continue
+                
+                # キャストマップ構築 (内部キャストID -> 情報)
+                # ※内部キャストDBのA列をIDとして使うか、別途ID列があるか確認が必要ですが
+                # ここではA列をID兼名前として扱う（またはキャストリストのマッピングでカバー）
+                # 今回は主に「Email -> SlackID」のために使う
+                email = str(row[3]).strip()
+                slack_id = str(row[4]).strip()
+                
+                if email:
+                    # 大文字小文字区別なく検索できるように
+                    email_to_slack_map[email.lower()] = slack_id
+
+        except Exception as e:
+            print(f"Warning: Failed to load Internal Cast DB: {e}")
+
+        # 2. キャストリスト (全キャスト情報)
+        try:
+            # シート名揺らぎ対応
+            try:
+                external_ws = await sh.worksheet("キャストリスト")
+            except:
+                external_ws = await sh.worksheet("CastDB")
+            
+            external_rows = await external_ws.get_all_values()
+            for row in external_rows[1:]:
+                if len(row) < 2: continue
+                
+                # A列(0): ID, B列(1): 名前, H列(7): Email, K列(10): SlackID
+                cid = str(row[0]).strip()
+                name = str(row[1]).strip()
+                email = str(row[7]).strip() if len(row) > 7 else ""
+                slack_id = str(row[10]).strip() if len(row) > 10 else ""
+                type_val = str(row[9]).strip() if len(row) > 9 else "外部"
+
+                if cid:
+                    cast_map[cid] = {
+                        "name": name,
+                        "email": email,
+                        "slack_id": slack_id,
+                        "type": type_val
+                    }
+                    # 内部キャストDBにない場合も補完
+                    if email:
+                         email_to_slack_map[email.lower()] = slack_id
+
+        except Exception as e:
+            print(f"Warning: Failed to load Cast List: {e}")
+
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        new_rows = []
+        internal_events = [] # カレンダー登録用
+        
+        # orderTypeによってアカウント名を決定
+        account_name = "外部案件" if payload.orderType == "external" else "社内イベント"
+
+        for cid in payload.castIds:
+            # IDの型揺らぎ吸収
+            cid_str = str(cid).strip()
+            cast = cast_map.get(cid_str, {})
+            
+            cast_name = cast.get("name") or "不明" # これで解決するはず
+            cast_email = cast.get("email") or ""
+            cast_type = cast.get("type") or "外部"
+            
+            # 内部キャスト判定
+            is_internal_cast = (cast_type == "内部")
+            
+            # ステータス: 内部なら仮押さえ、外部なら決定
+            status = "仮キャスティング" if is_internal_cast else "決定"
+
+            # --- Slack通知 ---
+            # メンション
+            slack_id = cast.get("slack_id") or ""
+            mention = f"<@{slack_id}>" if slack_id else cast_name
+            
+            # CC: オーダー送信者のメールからSlackIDを引く
+            orderer_email_key = payload.ordererEmail.strip().lower()
+            cc_slack_id = email_to_slack_map.get(orderer_email_key)
+            cc_mention = f"<@{cc_slack_id}>" if cc_slack_id else payload.ordererEmail
+
+            # フォーマット作成
+            dates_str = ", ".join(payload.dates).replace("-", "/")
+            time_range = f"{payload.startTime} ~ {payload.endTime}"
+            
+            # 指定フォーマット: 赤文字(` `)を使用
+            msg = f"{mention} \nCC: {cc_mention}\n\n"
+            msg += f"【{account_name}】\n"
+            msg += f"`タイトル`\n{payload.title}\n"
+            msg += f"`日時`\n{dates_str}\n"
+            msg += f"`時間`\n{time_range}"
+
+            ts = None
+            permalink = ""
+            try:
+                resp = await slack_client.chat_postMessage(
+                    channel=SLACK_DEFAULT_CHANNEL,
+                    text=msg
+                )
+                ts = resp.get("ts")
+                if ts:
+                    perm = await slack_client.chat_getPermalink(channel=SLACK_DEFAULT_CHANNEL, message_ts=ts)
+                    permalink = perm.get("permalink", "")
+            except Exception as e:
+                print(f"Slack error: {e}")
+
+            # 行データ作成 (日付ごとにレコード)
+            for date in payload.dates:
+                import uuid
+                casting_id = f"sp_{uuid.uuid4()}"
+                
+                # A-W列 (23列)
+                row = [
+                    casting_id,             # A: CastingID
+                    account_name,           # B: AccountName (タブ振り分けキー)
+                    payload.title,          # C: ProjectName
+                    "出演",                 # D: RoleName
+                    cid_str,                # E: CastID
+                    cast_name,              # F: CastName
+                    date,                   # G: StartDate
+                    date,                   # H: EndDate
+                    1,                      # I: Rank
+                    status,                 # J: Status
+                    f"{time_range}",        # K: Note
+                    ts,                     # L: SlackThreadTS
+                    permalink,              # M: Permalink
+                    "その他",               # N: MainSub
+                    "",                     # O: CalendarEventID (あとで埋める)
+                    "",                     # P: ProjectID
+                    timestamp,              # Q: LastUpdated
+                    payload.ordererEmail,   # R: UpdatedBy
+                    "",                     # S: Priority
+                    cast_type,              # T: InternalType
+                    cast_email,             # U: Email
+                    "",                     # V: Cost
+                    "[]"                    # W: Structure
+                ]
+                new_rows.append(row)
+
+                # カレンダー登録対象ならリストに追加
+                if is_internal_cast:
+                    internal_events.append({
+                        "castingId": casting_id,
+                        "accountName": account_name,
+                        "projectName": payload.title,
+                        "roleName": "出演",
+                        "mainSub": "その他",
+                        "start": date,
+                        "end": date,
+                        "email": cast_email,
+                        "status": status,
+                        "time_range": time_range,
+                        "rowNumber": None # 後で計算
+                    })
+
+        # DB保存 & カレンダー用レスポンス作成
+        response_data = {"ok": True, "calendar_events": []}
+
+        if new_rows:
+            append_res = await ws.append_rows(new_rows, value_input_option="USER_ENTERED")
+            
+            # 追加された行番号を計算してレスポンスに含める
+            if internal_events:
+                updated_range = append_res.get('updates', {}).get('updatedRange', '')
+                import re
+                match = re.search(r'!A(\d+):', updated_range)
+                start_row = int(match.group(1)) if match else 0
+                
+                if start_row > 0:
+                    # castingId -> 行番号 マッピング
+                    id_to_row = {}
+                    for i, r in enumerate(new_rows):
+                        id_to_row[r[0]] = start_row + i
+                    
+                    # イベントに行番号を付与
+                    for ev in internal_events:
+                        if ev["castingId"] in id_to_row:
+                            ev["rowNumber"] = id_to_row[ev["castingId"]]
+                    
+                    response_data["calendar_events"] = internal_events
+
+    except Exception as e:
+        print(f"Error in notify_special_order: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return response_data
+
 
 @app.post("/api/notify/status_update")
 async def notify_status_update(
@@ -515,11 +737,12 @@ async def shooting_contact_list():
                 "location": r[12] if len(r) > 12 else "",# M
                 "address": r[13] if len(r) > 13 else "", # N
                 "makingUrl": r[14] if len(r) > 14 else "",# O
-                "cost": r[15] if len(r) > 15 else "",     # P (Cost) ★新規
+                "cost": r[15] if len(r) > 15 else "",     # P (Cost)
                 "postDate": r[16] if len(r) > 16 else "", # Q (旧P)
                 "updatedBy": r[17] if len(r) > 17 else "",# R (旧Q)
                 "updatedAt": r[18] if len(r) > 18 else "",# S (旧R)
                 "mainSub": r[19] if len(r) > 19 else "その他", # T (旧S)
+                "poUuid": r[20] if len(r) > 20 else "",   # U (PO UUID) ★追加
             })
         return result
     except Exception as e:
@@ -620,6 +843,7 @@ async def add_shooting_contact(payload: dict):
     postDate: Optional[str] = None
     mainSub: Optional[str] = None
     cost: Optional[str] = None # ★追加
+    poUuid: Optional[str] = None # ★追加 (U列)
 
 @app.post("/api/shooting_contact/update")
 async def update_shooting_contact_status(payload: ShootingContactUpdateItem):
@@ -647,7 +871,38 @@ async def update_shooting_contact_status(payload: ShootingContactUpdateItem):
         # M(12): Location
         # N(13): Address
         # O(14): MakingURL
-        # P(15): PostDate
+        # P(15): Cost
+        # Q(16): PostDate
+        # R(17): UpdatedBy
+        # S(18): UpdatedAt
+        # T(19): Main/Sub
+        # U(20): PO UUID (New)
+
+        updates = []
+        if payload.status is not None:
+            updates.append({"range": f"J{row_idx}", "values": [[payload.status]]})
+        if payload.inTime is not None:
+            updates.append({"range": f"K{row_idx}", "values": [[payload.inTime]]})
+        if payload.outTime is not None:
+            updates.append({"range": f"L{row_idx}", "values": [[payload.outTime]]})
+        if payload.location is not None:
+            updates.append({"range": f"M{row_idx}", "values": [[payload.location]]})
+        if payload.address is not None:
+            updates.append({"range": f"N{row_idx}", "values": [[payload.address]]})
+        if payload.makingUrl is not None:
+            updates.append({"range": f"O{row_idx}", "values": [[payload.makingUrl]]})
+        if payload.cost is not None:
+            updates.append({"range": f"P{row_idx}", "values": [[payload.cost]]})
+        if payload.postDate is not None:
+            updates.append({"range": f"Q{row_idx}", "values": [[payload.postDate]]})
+        if payload.mainSub is not None:
+            updates.append({"range": f"T{row_idx}", "values": [[payload.mainSub]]})
+        if payload.poUuid is not None:
+            updates.append({"range": f"U{row_idx}", "values": [[payload.poUuid]]})
+
+        # Update Timestamp (S列)
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        updates.append({"range": f"S{row_idx}", "values": [[now_str]]})
         # S(18): Main/Sub
         
         updates = []

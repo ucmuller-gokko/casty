@@ -144,6 +144,65 @@
   </div>
   <div id="shoot-mail-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center modal-backdrop"></div>
 
+  <!-- No Shooting Selection Popup -->
+  <div id="no-shooting-popup"
+    class="hidden fixed inset-0 z-[70] flex items-center justify-center modal-backdrop bg-black bg-opacity-50">
+    <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm text-center">
+      <h3 class="text-lg font-bold text-gray-800 mb-4">撮影案件が選択されていません</h3>
+      <div class="flex flex-col gap-3">
+        <button id="btn-order-external"
+          class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">外部案件としてオーダーする</button>
+        <button id="btn-order-internal"
+          class="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">社内イベント用にオーダーする</button>
+        <button id="btn-popup-back"
+          class="px-4 py-2 bg-gray-300 text-gray-700 rounded hover:bg-gray-400">撮影選択に戻る</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Special Order Modal -->
+  <div id="special-order-modal"
+    class="hidden fixed inset-0 z-[80] flex items-center justify-center modal-backdrop bg-black bg-opacity-50">
+    <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg">
+      <h3 id="special-order-title" class="text-xl font-bold text-gray-800 mb-4">特別オーダー</h3>
+
+      <div class="mb-4">
+        <label class="block text-sm font-medium text-gray-700 mb-1">タイトル (案件/イベント内容)</label>
+        <input type="text" id="special-order-name" class="w-full border rounded px-3 py-2"
+          placeholder="例: 〇〇CM撮影、〇〇イベント">
+      </div>
+
+      <div class="mb-4">
+        <label class="block text-sm font-medium text-gray-700 mb-1">選択中の日付</label>
+        <div id="special-order-date-list" class="text-sm text-gray-600 bg-gray-50 p-2 rounded max-h-24 overflow-y-auto">
+        </div>
+        <input type="hidden" id="special-order-dates-json">
+      </div>
+
+      <div class="grid grid-cols-2 gap-4 mb-4">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">開始時間</label>
+          <input type="time" id="special-order-start" class="w-full border rounded px-3 py-2">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">終了時間</label>
+          <input type="time" id="special-order-end" class="w-full border rounded px-3 py-2">
+        </div>
+      </div>
+
+      <div class="mb-4">
+        <label class="block text-sm font-medium text-gray-700 mb-1">選択中のキャスト</label>
+        <div id="special-order-cast-list" class="text-sm text-gray-600 bg-gray-50 p-2 rounded"></div>
+      </div>
+
+      <div class="flex justify-end gap-3 mt-6">
+        <button id="btn-special-cancel" class="px-4 py-2 border rounded hover:bg-gray-50">キャンセル</button>
+        <button id="btn-special-submit"
+          class="px-6 py-2 bg-indigo-600 text-white font-bold rounded hover:bg-indigo-700">送信</button>
+      </div>
+    </div>
+  </div>
+
   <div id="progress-modal"
     class="hidden fixed inset-0 z-[60] flex items-center justify-center modal-backdrop bg-black bg-opacity-50">
     <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm text-center">
@@ -328,86 +387,124 @@
       async function initializeGapiClient() { await gapi.client.init({ apiKey: API_KEY, discoveryDocs: DISCOVERY_DOCS }); gapiInited = true; maybeCheckTokenAndLoad(); }
       function gisLoaded() {
         tokenClient = google.accounts.oauth2.initTokenClient({
-          client_id: CLIENT_ID, scope: SCOPES,
+          client_id: CLIENT_ID,
+          scope: SCOPES,
           callback: (tokenResponse) => {
             if (tokenResponse && tokenResponse.access_token) {
-              // ★追加: トークンをセットしてAPI呼び出しに備える
+              // トークンが取れたらセット
               gapi.client.setToken(tokenResponse);
               localStorage.setItem('gapi_granted', 'true');
-              showMessage('ログインしました', 'success');
-              // checkLoginStatus(); // This function is not defined in the provided context.
-              // Assuming checkLoginStatus() is meant to trigger updateUI(true) or similar.
-              // For now, let's call updateUI(true) directly if that's the intent.
-              // If it's for a specific login status check, it needs to be defined.
-              // Based on the original code, updateUI(true) is called after setting token.
-              // Let's keep the original flow for now, but ensure the token is set.
 
-              // Original logic for authResolver/authRejecter
-              if (window.authResolver) {
-                window.authResolver(tokenResponse);
-              }
-
-              if (tokenResponse.error) throw tokenResponse;
-              localStorage.setItem('gapi_token', JSON.stringify(tokenResponse));
-              // Set Session Start Time if not present (or update on explicit login)
-              // Note: We only want to set this on *explicit* login or if missing.
-              // But here, this callback runs for both explicit and silent refresh.
-              // If we want "1 day from login", we should set it only if it's null?
-              // Or if we want "refresh extends session"? No, user said "1 day session".
-              // Let's set it if missing. If explicit login (prompt='consent'), we might want to reset it.
-              // For now, let's set it if missing.
+              // ★修正: セッション開始時刻の管理
+              // 「明示的なログイン（ポップアップ）」か「自動更新」かで分岐
+              // まだセッション開始時刻がない（初回ログイン）なら現在時刻をセット
               if (!localStorage.getItem('session_start')) {
                 localStorage.setItem('session_start', Date.now());
               }
+
+              // 待機していた処理があれば解決（ensureAuth用）
+              if (window.authResolver) {
+                window.authResolver(tokenResponse);
+                window.authResolver = null;
+                window.authRejecter = null;
+              }
+
+              // UI更新（データ読み込み開始）
               updateUI(true);
+            } else {
+              // エラー時
+              if (window.authRejecter) {
+                window.authRejecter(tokenResponse);
+                window.authResolver = null;
+                window.authRejecter = null;
+              }
+            }
+          },
+          // エラーハンドリング（ポップアップが閉じられた場合など）
+          error_callback: (nonTokenError) => {
+            console.error('OAuth error:', nonTokenError);
+            if (window.authRejecter) {
+              window.authRejecter(nonTokenError);
+              window.authResolver = null;
+              window.authRejecter = null;
             }
           }
         });
-        gisInited = true; maybeCheckTokenAndLoad();
+        gisInited = true;
+        maybeCheckTokenAndLoad();
       }
 
       async function ensureAuth() {
-        const token = gapi.client.getToken();
-        if (token && currentUser) return true; // Valid session
+        // 1. まず24時間経過チェック
+        const sessionStart = localStorage.getItem('session_start');
+        const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
+        if (sessionStart && (Date.now() - parseInt(sessionStart, 10) > ONE_DAY_MS)) {
+          console.log("Session expired > 24h");
+          handleSignoutClick();
+          return false; // 期限切れのためfalseを返す
+        }
+
+        // 2. 現在のトークンが有効かチェック（簡易的）
+        const token = gapi.client.getToken();
+        if (token && currentUser) {
+          // トークンがあっても、有効期限(1時間)が切れている可能性があるので
+          // 本当はここでAPIを叩いて401ならリフレッシュ、という流れがベストだが
+          // 簡易的に「トークンがあれば一旦OK」とし、APIエラー時にリロードを促す運用とするか、
+          // もしくは念の為サイレントリフレッシュをかける。
+          // ここでは「ユーザー体験」優先で、そのまま通す（エラーが出たらユーザーが再操作する）
+          return true;
+        }
+
+        // 3. トークンがない、または無効そうな場合はサイレントリフレッシュを試みる
         try {
           await new Promise((resolve, reject) => {
             window.authResolver = resolve;
             window.authRejecter = reject;
-            tokenClient.requestAccessToken({ prompt: '' });
+            // prompt: '' (空文字) は、可能ならサイレント、だめならポップアップ挙動になる場合があるが
+            // 明示的に prompt: 'none' で裏で取れるか試すのがスマート
+            tokenClient.requestAccessToken({ prompt: 'none' });
           });
           return true;
         } catch (e) {
-          console.warn("Silent refresh failed", e);
-          return false;
+          console.warn("Silent refresh via ensureAuth failed, trying consent...", e);
+          // サイレントが失敗したら（クッキー切れなど）、ポップアップを出す
+          try {
+            await new Promise((resolve, reject) => {
+              window.authResolver = resolve;
+              window.authRejecter = reject;
+              tokenClient.requestAccessToken({ prompt: 'consent' });
+            });
+            return true;
+          } catch (err) {
+            return false;
+          }
         }
       }
+      // ★修正: ページ読み込み時のセッションチェックと自動復帰
       function maybeCheckTokenAndLoad() {
         if (gapiInited && gisInited) {
-          const stored = localStorage.getItem('gapi_token');
           const sessionStart = localStorage.getItem('session_start');
           const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
-          if (stored && sessionStart) {
-            const elapsed = Date.now() - parseInt(sessionStart, 10);
-            if (elapsed > ONE_DAY_MS) {
-              console.log('Session expired (24h). Clearing token.');
-              handleSignoutClick();
-              showMessage('セッション有効期限（24時間）が切れました。再度サインインしてください。', 'warning');
-              return;
-            }
-            gapi.client.setToken(JSON.parse(stored));
-            updateUI(true);
+          // セッション開始記録がない、または24時間以上経過している場合
+          if (!sessionStart || (Date.now() - parseInt(sessionStart, 10) > ONE_DAY_MS)) {
+            console.log('Session expired or not found. requiring login.');
+            handleSignoutClick(); // 期限切れなのでログアウト状態にする
+            showLoader(false);
+            return;
           }
-          else if (stored && !sessionStart) {
-            // Legacy session or first run with new code: Treat as new session or expire?
-            // Let's start a new session to be user friendly, or expire to be strict.
-            // User asked for "1 day session". Let's set start time now.
-            localStorage.setItem('session_start', Date.now());
-            gapi.client.setToken(JSON.parse(stored));
-            updateUI(true);
+
+          // 24時間以内なら、サイレントリフレッシュ（画面遷移なしでトークン再取得）を試みる
+          console.log('Session valid. Attempting silent refresh...');
+          try {
+            // prompt: 'none' を指定することで、ポップアップを出さずに再ログインを試みる
+            tokenClient.requestAccessToken({ prompt: 'none', login_hint: currentUser?.email });
+          } catch (e) {
+            console.warn('Silent refresh failed', e);
+            updateUI(false);
+            showLoader(false);
           }
-          else { updateUI(false); showLoader(false); }
         }
       }
       async function updateUI(isAuthorized) {
@@ -451,11 +548,15 @@
       }
       function handleSignoutClick() {
         const token = gapi.client.getToken();
-        if (token !== null) { google.accounts.oauth2.revoke(token.access_token, () => { }); gapi.client.setToken(''); }
-        if (token !== null) { google.accounts.oauth2.revoke(token.access_token, () => { }); gapi.client.setToken(''); }
+        if (token !== null) {
+          google.accounts.oauth2.revoke(token.access_token, () => { });
+          gapi.client.setToken('');
+        }
         localStorage.removeItem('gapi_token');
-        localStorage.removeItem('session_start');
-        updateUI(false); showMessage('サインアウトしました', 'info');
+        localStorage.removeItem('gapi_granted');
+        localStorage.removeItem('session_start'); // ★これを確実に消す
+        updateUI(false);
+        showMessage('サインアウトしました', 'info');
       }
       async function getUserProfile() {
         const res = await gapi.client.oauth2.userinfo.get(); currentUser = res.result;
@@ -1017,9 +1118,14 @@
 
       // ========= Status view =========
       // refresh=true: 描画前に必ずシートから再取得
+      window.currentStatusTab = 'casting'; // 'casting' (通常) | 'special' (外部/社内)
+
       async function renderCastingStatusView(refresh = false) {
         const view = document.getElementById('status-view');
         if (!view) return;
+
+        // Expose to window for onclick handlers
+        window.renderCastingStatusView = renderCastingStatusView;
 
         if (refresh) {
           try { showLoader(true); await fetchCastingDataFromSheet(); }
@@ -1031,24 +1137,34 @@
         const monthStart = new Date(y, m, 1), monthEnd = new Date(y, m + 1, 0);
 
         const header = `
-      <div class="flex items-center justify-between mb-3">
-        <div class="flex items-center gap-2">
-          <button id="status-prev-month" class="px-2 py-1 rounded border bg-white">&lt;</button>
-          <div class="font-semibold">${y}年${m + 1}月</div>
-          <button id="status-next-month" class="px-2 py-1 rounded border bg-white">&gt;</button>
-        </div>
-        <div class="flex items-center gap-3">
-          <label class="inline-flex items-center gap-1 text-sm">
-            <input id="status-show-order-wait" type="checkbox" ${statusOrderWaitOnly ? 'checked' : ''} />
-            <span>オーダー待ちのみ</span>
-          </label>
-          <label class="inline-flex items-center gap-1 text-sm">
-            <input id="status-show-past" type="checkbox" ${showPast ? 'checked' : ''} />
-            <span>過去を表示</span>
-          </label>
-          <button id="status-reload" class="px-2 py-1 rounded border bg-white text-sm">再読込</button>
-        </div>
-      </div>`;
+          <div class="flex space-x-1 border-b mb-4">
+            <button class="px-4 py-2 font-medium text-sm rounded-t-lg border-b-2 transition-colors ${window.currentStatusTab === 'casting' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-gray-500 hover:text-gray-700'}"
+              onclick="window.currentStatusTab = 'casting'; renderCastingStatusView(false);">
+              🎬 通常キャスティング
+            </button>
+            <button class="px-4 py-2 font-medium text-sm rounded-t-lg border-b-2 transition-colors ${window.currentStatusTab === 'special' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-gray-500 hover:text-gray-700'}"
+              onclick="window.currentStatusTab = 'special'; renderCastingStatusView(false);">
+              🏢 外部案件・社内イベント
+            </button>
+          </div>
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2">
+              <button id="status-prev-month" class="px-2 py-1 rounded border bg-white">&lt;</button>
+              <div class="font-semibold">${y}年${m + 1}月</div>
+              <button id="status-next-month" class="px-2 py-1 rounded border bg-white">&gt;</button>
+            </div>
+            <div class="flex items-center gap-3">
+              <label class="inline-flex items-center gap-1 text-sm">
+                <input id="status-show-order-wait" type="checkbox" ${statusOrderWaitOnly ? 'checked' : ''} />
+                <span>オーダー待ちのみ</span>
+              </label>
+              <label class="inline-flex items-center gap-1 text-sm">
+                <input id="status-show-past" type="checkbox" ${showPast ? 'checked' : ''} />
+                <span>過去を表示</span>
+              </label>
+              <button id="status-reload" class="px-2 py-1 rounded border bg-white text-sm">再読込</button>
+            </div>
+          </div>`;
 
         // const ORDER_WAIT_STATUSES = ['オーダー待ち', 'オーダー待ち（仮キャスティング）']; // Moved to global scope
 
@@ -1074,7 +1190,7 @@
             const accountGroup = dateGroup.get(accountName);
 
             // Expand structureData if available
-            if (c.structureData && Array.isArray(c.structureData)) {
+            if (c.structureData && Array.isArray(c.structureData) && c.structureData.length > 0) {
               c.structureData.forEach(item => {
                 const pName = item.project || '未定';
                 if (!accountGroup.has(pName)) accountGroup.set(pName, []);
@@ -1101,6 +1217,8 @@
 
         const sortedDates = Array.from(grouped.keys()).sort();
         let html = header;
+        const SPECIAL_ACCOUNTS = ['外部案件', '社内イベント'];
+
         if (sortedDates.length === 0) {
           html += `<p class="text-gray-600">該当月のキャスティング登録はありません。</p>`;
         } else {
@@ -1109,6 +1227,27 @@
             let allRecordsInDate = Array.from(dateGroup.values()).flatMap(acc => Array.from(acc.values()).flat());
             const hasOrderWait = allRecordsInDate.some(it => ORDER_WAIT_STATUSES.includes(it.status));
             if (statusOrderWaitOnly && !hasOrderWait) continue;
+
+            // ★フィルタリング判定 (日付単位で表示するかどうかは、その日付に含まれるアカウントがフィルタに合致するかで決める？
+            // いや、日付ブロックは表示して、その中のアカウントをフィルタリングすべきか？
+            // ユーザー要望: "表示分け（タブ化）" -> タブ切り替えで表示内容が変わる。
+            // 日付ブロックの中にアカウントごとのブロックがある構造。
+            // なので、日付ブロック自体を表示するかどうかは、"フィルタリング後のアカウントが1つでもあるか" で決めるべき。
+
+            const sortedAccounts = Array.from(dateGroup.keys()).sort();
+            const visibleAccounts = sortedAccounts.filter(acc => {
+              const isSpecial = SPECIAL_ACCOUNTS.includes(acc);
+
+              if (window.currentStatusTab === 'special') {
+                // 特別タブ: 特別案件だけを表示
+                return isSpecial;
+              } else {
+                // 通常タブ: 特別案件以外を表示
+                return !isSpecial;
+              }
+            });
+
+            if (visibleAccounts.length === 0) continue; // 表示するアカウントがなければ次の日付へ
 
             html += `
           <div class="mt-6 border rounded-lg overflow-hidden status-date-group" data-date-block="${date}">
@@ -1121,48 +1260,49 @@
             </div>
             <div class="date-body p-2 bg-white" data-date-body="${date}">`;
 
-            const sortedAccounts = Array.from(dateGroup.keys()).sort();
-            for (const account of sortedAccounts) {
+            // ★追加確認: accountHtml生成時のレコードチェック
+            for (const account of visibleAccounts) {
               const accountGroup = dateGroup.get(account);
-              const allRecordsInAccount = Array.from(accountGroup.values()).flat();
-              const baseRec = allRecordsInAccount.find(r => r.slackThreadTs);
 
-              let accountHtml = `<div class="ml-2 border-l-2 border-gray-300 pl-4 py-2">
-            <div class="flex items-center justify-between mb-1">
-              <h4 class="text-lg font-semibold text-gray-800">${account}</h4>
-              ${baseRec ? `
-                <button
-                  class="text-xs px-2 py-1 bg-emerald-100 hover:bg-emerald-200 text-emerald-800"
-                  data-add-order="1"
-                  data-date="${date}"
-                  data-account="${account}"
-                  data-project-id="${baseRec.projectId || ''}"
-                  data-thread-ts="${baseRec.slackThreadTs || ''}"
-                  data-permalink="${baseRec.slackPermalink || ''}"
-                >
-                  ＋追加キャスト
-                </button>
-              ` : ''}
-            </div>`;
-
-              let hasContentForAccount = false;
+              // 特別オーダーの場合、project名は1つしかないことが多いが念の為ループ
               const sortedProjects = Array.from(accountGroup.keys()).sort();
+
+              // アカウント内のレコード有無チェック
+              let hasRecordsInAccount = false;
+
+              // 仮のHTMLバッファ
+              let tempAccountHtml = `<div class="ml-2 border-l-2 border-gray-300 pl-4 py-2">
+                  <div class="flex items-center justify-between mb-1">
+                    <h4 class="text-lg font-semibold text-gray-800">${account}</h4>
+                  </div>`;
+
               for (const project of sortedProjects) {
                 let records = accountGroup.get(project);
+
+                // オーダー待ちフィルタ
                 if (statusOrderWaitOnly) {
                   records = records.filter(it => ORDER_WAIT_STATUSES.includes(it.status));
                 }
-                if (records.length === 0) continue;
-                hasContentForAccount = true;
 
-                accountHtml += `<div class="ml-4 mt-2">
-              <h5 class="font-medium text-gray-700 mb-1">${project}</h5>`;
+                if (records.length === 0) continue;
+                hasRecordsInAccount = true;
+
+                tempAccountHtml += `<div class="ml-4 mt-2">
+                    <h5 class="font-medium text-gray-700 mb-1">${project}</h5>`;
 
                 const tableRows = records.map(it => {
                   const cast = castData.find(c => c.castId === it.castId);
                   const castName = cast?.name || it.castId;
-                  const badgeClass = it.status === '決定' ? 'bg-red-100 text-red-700' : it.status === 'キャンセル' ? 'bg-gray-200 text-gray-700' : it.status === '打診中' ? 'bg-blue-100 text-blue-700' : it.status === '条件つきOK' ? 'bg-emerald-100 text-emerald-700' : it.status === 'NG' ? 'bg-gray-300 text-gray-800' : ORDER_WAIT_STATUSES.includes(it.status) ? 'bg-amber-100 text-amber-800' : 'bg-yellow-100 text-yellow-800';
-                  const rowMutedClass = it.status === 'NG' ? 'opacity-50' : '';
+                  const [badgeClass, rowMutedClass] = (() => {
+                    const s = it.status;
+                    if (s === '決定') return ['bg-red-100 text-red-700', ''];
+                    if (s === 'キャンセル') return ['bg-gray-200 text-gray-700', ''];
+                    if (s === '打診中') return ['bg-blue-100 text-blue-700', ''];
+                    if (s === '条件つきOK') return ['bg-emerald-100 text-emerald-700', ''];
+                    if (s === 'NG') return ['bg-gray-300 text-gray-800', 'opacity-50'];
+                    if (ORDER_WAIT_STATUSES.includes(s)) return ['bg-amber-100 text-amber-800', ''];
+                    return ['bg-yellow-100 text-yellow-800', ''];
+                  })();
 
                   // Order Wait の場合は金額編集可能に
                   let costDisplay = it.cost ? '¥' + Number(it.cost).toLocaleString() : '-';
@@ -1194,7 +1334,7 @@
                 </tr>`;
                 }).join('');
 
-                accountHtml += `
+                tempAccountHtml += `
               <div class="overflow-x-auto bg-white rounded-lg shadow-sm">
                 <table class="min-w-full text-sm table-fixed">
                   <thead class="bg-gray-100">
@@ -1211,11 +1351,15 @@
                   </thead>
                   <tbody>${tableRows}</tbody>
                 </table>
-              </div>`;
-                accountHtml += `</div>`;
+              </div></div>`;
               }
-              accountHtml += `</div>`;
-              if (hasContentForAccount) html += accountHtml;
+
+              tempAccountHtml += `</div>`;
+
+              // レコードが1つでもあればHTMLに追加
+              if (hasRecordsInAccount) {
+                html += tempAccountHtml;
+              }
             }
             html += `</div></div>`;
           }
@@ -3412,7 +3556,29 @@ ${roleName}：${item.cast.name}`;
         modal.classList.remove('hidden');
 
         // 生成ボタンイベント
-        document.getElementById('btn-generate-pdf').addEventListener('click', () => {
+        document.getElementById('btn-generate-pdf').addEventListener('click', async () => {
+          // UUID生成 (既存があればそれを使う、なければ新規生成)
+          const uuid = targetCasting.poUuid || crypto.randomUUID();
+
+          // Save UUID to Backend
+          try {
+            await fetch('/api/shooting_contact/update', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                castingId: castingId,
+                poUuid: uuid
+              })
+            });
+            // Update local data
+            targetCasting.poUuid = uuid;
+          } catch (e) {
+            console.error("Failed to save PO UUID", e);
+            // Continue anyway? Or stop? User said "save to sheet".
+            // We should probably alert but continue or stop.
+            // For now, log and continue.
+          }
+
           const finalData = {
             date: document.getElementById('pdf-date').value,
             castName: document.getElementById('pdf-castname').value,
@@ -3420,7 +3586,8 @@ ${roleName}：${item.cast.name}`;
             role: document.getElementById('pdf-role').value,
             shootDate: document.getElementById('pdf-shootdate').value,
             cost: document.getElementById('pdf-cost').value,
-            note: document.getElementById('pdf-note').value
+            note: document.getElementById('pdf-note').value,
+            uuid: uuid
           };
           generatePDFFromData(finalData);
           modal.classList.add('hidden');
@@ -3468,19 +3635,15 @@ ${roleName}：${item.cast.name}`;
           <div style="text-decoration: none !important; font-size: 14px; line-height: 1.6;">
             <h1 style="text-align: center; font-size: 20px; font-weight: bold; margin-bottom: 30px;">GOKKO倶楽部出演発注書</h1>
             
-            <div style="text-align: right; margin-bottom: 20px;">${data.date}</div>
+            <div style="text-align: right; margin-bottom: 5px;">${data.date}</div>
+            <div style="text-align: right; margin-bottom: 20px; font-size: 10px; color: #666;">No. ${data.uuid || ''}</div>
             
             <div style="font-size: 14px; margin-bottom: 20px;">
               <span style="font-size: 14px; border-bottom: 1px solid #000;">${data.castName} 様</span>
             </div>
 
-            <p style="margin-bottom: 5px;">拝啓</p>
-            <p style="margin-bottom: 5px;">${greeting}の候、貴社におかれましては益々ご清栄のこととお慶び申し上げます。<br>
-            平素は格別のご高配を賜り、厚く御礼申し上げます。</p>
             <p style="margin-bottom: 5px;">ご快諾いただきましたドラマ出演の件につきまして、下記の通り発注申し上げます。<br>
-            内容をご確認いただき、ご不明な点がございましたら担当までご連絡ください。<br>
-            本作品へのご出演、心より感謝申し上げます。</p>
-            <p style="text-align: right; margin-bottom: 20px;">敬具</p>
+            内容をご確認いただき、ご不明な点がございましたら担当までご連絡ください。</p>
 
             <div style="margin-bottom: 20px; padding: 10px; width: 100%;">
               <p style="font-weight: bold; margin-bottom: 5px;">【発注元】</p>
@@ -3494,7 +3657,6 @@ ${roleName}：${item.cast.name}`;
               <p style="font-weight: bold; border-bottom: 1px solid #000; display: inline-block; margin-bottom: 10px;">【お取引条件】</p>
               <p style="margin: 2px 0;">支払条件： 月末締め翌月末払い</p>
               <p style="margin: 2px 0;">支払方法： ご指定の銀行口座へお振込み</p>
-              <p style="margin: 2px 0;">源泉徴収： [例：有・無（必要な場合はマイナンバーをご提出ください）]</p>
               <p style="margin: 2px 0;">秘密保持： 本件に関わる脚本内容、撮影情報、共演者情報等は、公式解禁まで第三者への漏洩（SNS含む）を禁止とさせていただきます。</p>
               <p style="text-align: right; margin: 0;">以上</p>
             </div>
@@ -3520,7 +3682,7 @@ ${roleName}：${item.cast.name}`;
               </tr>
               <tr style="border: 1px solid #000;">
                 <td style="border: 1px solid #000; padding: 8px; text-align: center;">出演料（金額）</td>
-                <td style="border: 1px solid #000; padding: 8px;">${costStr} （税別・税込）</td>
+                <td style="border: 1px solid #000; padding: 8px;">${costStr} （税別）</td>
               </tr>
             </table>
 
@@ -4951,8 +5113,16 @@ ${roleName}：${item.cast.name}`;
       document.getElementById('shooting-contact-btn')?.addEventListener('click', showShootContactPage);
 
       // (1790行目付近の nav-cart イベントリスナーは残す)
+      // (1790行目付近の nav-cart イベントリスナーは残す)
       document.getElementById('nav-cart')?.addEventListener('click', e => {
         e.preventDefault();
+
+        // 撮影が選択されていない場合の分岐
+        if (!selectedShooting) {
+          document.getElementById('no-shooting-popup').classList.remove('hidden');
+          return;
+        }
+
         const modal = document.getElementById('cart-modal');
         if (!modal) return;
 
@@ -4963,6 +5133,130 @@ ${roleName}：${item.cast.name}`;
         }
         modal.classList.remove('hidden');
         renderCartModal();
+      });
+
+      // No Shooting Popup Events
+      document.getElementById('btn-popup-back')?.addEventListener('click', () => {
+        document.getElementById('no-shooting-popup').classList.add('hidden');
+      });
+
+      document.getElementById('btn-order-external')?.addEventListener('click', () => {
+        openSpecialOrderModal('external');
+      });
+
+      document.getElementById('btn-order-internal')?.addEventListener('click', () => {
+        openSpecialOrderModal('internal');
+      });
+
+      // Special Order Logic
+      let currentSpecialOrderType = 'external';
+
+      function openSpecialOrderModal(type) {
+        document.getElementById('no-shooting-popup').classList.add('hidden');
+        const modal = document.getElementById('special-order-modal');
+        modal.classList.remove('hidden');
+        currentSpecialOrderType = type;
+
+        document.getElementById('special-order-title').textContent = type === 'external' ? '外部案件オーダー' : '社内イベントオーダー';
+
+        // Handle Dates
+        const dateListEl = document.getElementById('special-order-date-list');
+        const datesJsonEl = document.getElementById('special-order-dates-json');
+
+        // Use selectedDates if available, otherwise default to today
+        let targetDates = selectedDates.length > 0 ? [...selectedDates] : [new Date().toISOString().split('T')[0]];
+        targetDates.sort();
+
+        dateListEl.textContent = targetDates.join(', ');
+        datesJsonEl.value = JSON.stringify(targetDates);
+
+        // Cast List
+        const castListEl = document.getElementById('special-order-cast-list');
+        const castNames = Object.values(cart).map(c => c.cast?.name || c.castName || '不明').join(', ');
+        castListEl.textContent = castNames || 'キャストが選択されていません';
+      }
+
+      document.getElementById('btn-special-cancel')?.addEventListener('click', () => {
+        document.getElementById('special-order-modal').classList.add('hidden');
+      });
+
+      document.getElementById('btn-special-submit')?.addEventListener('click', async () => {
+        const title = document.getElementById('special-order-name').value;
+        const datesJson = document.getElementById('special-order-dates-json').value;
+        const start = document.getElementById('special-order-start').value;
+        const end = document.getElementById('special-order-end').value;
+        const castIds = Object.keys(cart);
+
+        if (!title || !datesJson || !start || !end) {
+          alert('すべての項目を入力してください');
+          return;
+        }
+        if (castIds.length === 0) {
+          alert('キャストが選択されていません。カートにキャストを追加してください。');
+          return;
+        }
+
+        const dates = JSON.parse(datesJson);
+        const userEmail = currentUser?.email || 'unknown@example.com';
+
+        showProgressBar("処理を開始します...", 10);
+
+        try {
+          const payload = {
+            orderType: currentSpecialOrderType,
+            title: title,
+            dates: dates, // Changed from date to dates
+            startTime: start,
+            endTime: end,
+            castIds: castIds,
+            ordererEmail: userEmail
+          };
+
+          updateProgressBar("オーダー送信中...", 50);
+
+          const res = await fetch('/api/notify/special_order', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+
+          if (!res.ok) throw new Error('Order failed');
+
+          // ★追加: レスポンスデータの取得とカレンダー登録
+          const data = await res.json();
+
+          if (data.calendar_events && data.calendar_events.length > 0) {
+            updateProgressBar("カレンダー登録中...", 80);
+            console.log("Creating calendar events:", data.calendar_events);
+            // 既存の関数を使ってカレンダー登録＆シート書き戻し
+            await createInternalHoldEvents(data.calendar_events);
+          }
+
+          updateProgressBar("完了しました", 100);
+          await new Promise(r => setTimeout(r, 500));
+
+          document.getElementById('special-order-modal').classList.add('hidden');
+          cart = {};
+          updateCartCount();
+          displayAvailableCasts();
+          showMessage('オーダーを送信しました', 'success');
+
+          // データ再読み込みして表示更新
+          setTimeout(() => {
+            // ★もしタブがcastingならspecialに切り替えてあげる
+            if (window.currentStatusTab !== 'special') {
+              window.currentStatusTab = 'special';
+              switchView('status-view');
+            }
+            renderCastingStatusView(true);
+          }, 1500);
+
+        } catch (e) {
+          console.error(e);
+          showMessage('送信に失敗しました', 'error');
+        } finally {
+          hideProgressBar();
+        }
       });
 
       document.getElementById('authorize_button')?.addEventListener('click', handleAuthClick);
