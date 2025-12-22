@@ -3,7 +3,6 @@ import json
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, HTTPException, File, UploadFile, Form, BackgroundTasks
 from fastapi.responses import HTMLResponse, Response, JSONResponse
-from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from typing import List, Optional, Literal
@@ -14,66 +13,55 @@ from google.oauth2.service_account import Credentials
 import aiohttp
 from datetime import datetime
 
+# Auth imports
+from google_auth_oauthlib.flow import Flow
+import google.auth.transport.requests
+import google.oauth2.credentials
+
 # --- 設定 ---
 load_dotenv()
 
-# プロジェクトのルートディレクトリの絶対パスを取得
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE_DIR = os.path.join(BASE_DIR, "templates")
-STATIC_DIR = os.path.join(BASE_DIR, "static")
 
 # --- 環境変数 ---
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+# ※ OAuth Client Secret が必要です。jsonの中身を文字列として環境変数に入れるか、ファイルを読み込んでください
+# ここでは環境変数 GOOGLE_OAUTH_CLIENT_SECRET_JSON にJSON文字列が入っている想定です
+GOOGLE_OAUTH_CLIENT_SECRET_JSON = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET_JSON") 
+
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-SHOOTING_CONTACT_SHEET_ID = os.getenv("SHOOTING_CONTACT_SHEET_ID") # 撮影連絡DBのID
+SHOOTING_CONTACT_SHEET_ID = os.getenv("SHOOTING_CONTACT_SHEET_ID")
 
 SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
 SLACK_DEFAULT_CHANNEL = os.getenv("SLACK_DEFAULT_CHANNEL")
-
-
-# カレンダー（内部仮ホールド）
-CALENDAR_ID_INTERNAL_HOLD = os.getenv("CALENDAR_ID_INTERNAL_HOLD")
-
-# Slack通知機能追加
 SLACK_CHANNEL_TEST = os.getenv("SLACK_CHANNEL_TEST")
 SLACK_CHANNEL_TYPE_A = os.getenv("SLACK_CHANNEL_TYPE_A")
 SLACK_CHANNEL_TYPE_B = os.getenv("SLACK_CHANNEL_TYPE_B")
-SLACK_CHANNEL_TYPE_B = os.getenv("SLACK_CHANNEL_TYPE_B")
 SLACK_MENTION_GROUP_ID = os.getenv("SLACK_MENTION_GROUP_ID")
 
-# GAS連携
+CALENDAR_ID_INTERNAL_HOLD = os.getenv("CALENDAR_ID_INTERNAL_HOLD")
 GAS_URL_NOTION_SYNC = os.getenv("GAS_URL_NOTION_SYNC")
 
-# --- FastAPI アプリ ---
 app = FastAPI()
-
 templates = Jinja2Templates(directory=TEMPLATE_DIR)
-
-# static 配信
-# app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
-# --- Slack Client ---
 slack_client = AsyncWebClient(token=SLACK_BOT_TOKEN) if SLACK_BOT_TOKEN else None
 
+# --- Auth Config ---
+# フロントエンドと同じスコープ
+SCOPES = [
+    'https://www.googleapis.com/auth/spreadsheets',
+    'https://www.googleapis.com/auth/calendar.events',
+    'https://www.googleapis.com/auth/userinfo.profile',
+    'https://www.googleapis.com/auth/userinfo.email',
+    'https://www.googleapis.com/auth/drive.readonly',
+    'https://www.googleapis.com/auth/drive.file',
+    'https://www.googleapis.com/auth/documents',
+    'openid'
+]
 
 # --- Pydantic Models ---
-
-class CastingOrderItem(BaseModel):
-    castId: str
-    castName: str
-    roleName: str
-    mainSub: Optional[str] = "その他" # Default to "その他"
-    rank: str
-    startDate: str
-    endDate: str
-    status: str
-    accountName: str
-    projectName: str
-    projectId: str
-    castPriority: Optional[int] = None
-
-
 class OrderItem(BaseModel):
     castingId: str
     roleName: str = ""
@@ -82,7 +70,7 @@ class OrderItem(BaseModel):
     note: str = ""
     projectName: str
     slack_user_id: Optional[str] = None
-
+    conflictInfo: Optional[str] = None # 競合情報
 
 class OrderCreatedPayload(BaseModel):
     accountName: str
@@ -91,38 +79,24 @@ class OrderCreatedPayload(BaseModel):
     dateRanges: List[str]
     orders: List[OrderItem]
     orderType: Literal["pattern_a", "pattern_b", "test"] = "test"
-    ccString: Optional[str] = None # Added for CC support
-    slackThreadTs: Optional[str] = None # Added for Additional Order support
-
-# ... (existing code) ...
-
-
+    ccString: Optional[str] = None 
+    slackThreadTs: Optional[str] = None
+    isAdditionalOrder: bool = False  # ★追加
 
 class StatusUpdatePayload(BaseModel):
-    castingId: str           # キャスティングID
-    newStatus: str           # 変更後ステータス（OK / NG / 条件つきOK など）
-    castName: str            # キャスト名
+    castingId: str
+    newStatus: str
+    castName: str
     slackThreadTs: Optional[str] = None
-    slackPermalink: Optional[str] = None   # パーマリンク（無くてもOK）
-    extraMessage: Optional[str] = None     # 条件つきOKのときの一言
-    extraMessage: Optional[str] = None     # 条件つきOKのときの一言
-    isInternal: Optional[bool] = False     # 内部/外部フラグ（外部のみSlack連携）
-    projectId: Optional[str] = None        # NotionのページID (P列相当)
-    mainSub: Optional[str] = "その他"      # キャスト区分 (N列相当)
-    orderDetails: Optional[list] = None    # ★追加: W列の構造データ(JSON)を受け取る
-
+    slackPermalink: Optional[str] = None
+    extraMessage: Optional[str] = None
+    isInternal: Optional[bool] = False
+    projectId: Optional[str] = None
+    mainSub: Optional[str] = "その他"
+    orderDetails: Optional[list] = None
+    
     class Config:
         extra = "ignore"
-
-class ShootingContactAddItem(BaseModel):
-    castingId: str
-    accountName: str
-    projectName: str
-    roleName: str
-    castName: str
-    castType: str
-    shootDate: str
-    note: str
 
 class ShootingContactUpdateItem(BaseModel):
     castingId: str
@@ -131,131 +105,163 @@ class ShootingContactUpdateItem(BaseModel):
     outTime: Optional[str] = None
     location: Optional[str] = None
     address: Optional[str] = None
-    cost: Optional[str] = None    # ★追加
-    makingUrl: Optional[str] = None # O
-    postDate: Optional[str] = None # P -> Q
-    mainSub: Optional[str] = None # S -> T
+    cost: Optional[str] = None
+    makingUrl: Optional[str] = None
+    postDate: Optional[str] = None
+    mainSub: Optional[str] = None
+    poUuid: Optional[str] = None
 
+class SpecialOrderPayload(BaseModel):
+    orderType: Literal["external", "internal"]
+    title: str
+    dates: List[str]
+    startTime: str
+    endTime: str
+    castIds: List[str]
+    ordererEmail: str
+
+# --- Helpers ---
 def get_creds():
-    # .envファイルから読み込んだ認証情報（JSON文字列）を辞書に変換
     creds_json_str = os.getenv("GOOGLE_SHEETS_CREDS_JSON")
     if not creds_json_str:
         raise ValueError("環境変数 'GOOGLE_SHEETS_CREDS_JSON' が設定されていません。")
-    
-    # スコープを定義
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
-    
-    # eval() ではなく json.loads() を使用する
-    try:
-        creds_dict = json.loads(creds_json_str)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"環境変数 'GOOGLE_SHEETS_CREDS_JSON' のパースに失敗しました: {e}")
-
-    creds = Credentials.from_service_account_info(
-        creds_dict, scopes=scopes
-    )
-    return creds
+    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    creds_dict = json.loads(creds_json_str)
+    return Credentials.from_service_account_info(creds_dict, scopes=scopes)
 
 agcm = gspread_asyncio.AsyncioGspreadClientManager(get_creds)
 
-# --- Slack ヘルパー ---
+# --- Helper: Load Client Config (File or Env) ---
+def get_client_config():
+    """
+    Heroku環境(環境変数)とローカル環境(ファイル)の両方に対応する
+    """
+    # 1. まず環境変数を確認 (Heroku用)
+    env_json = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET_JSON")
+    if env_json:
+        try:
+            return json.loads(env_json)
+        except json.JSONDecodeError:
+            print("Error: GOOGLE_OAUTH_CLIENT_SECRET_JSON is invalid JSON")
+    
+    # 2. 環境変数がなければファイルを確認 (ローカル用)
+    json_path = os.path.join(BASE_DIR, 'client_secret.json')
+    if os.path.exists(json_path):
+        with open(json_path, 'r') as f:
+            return json.load(f)
+            
+    # 3. どちらもなければエラー
+    raise ValueError("Client Secretが見つかりません。環境変数 GOOGLE_OAUTH_CLIENT_SECRET_JSON または client_secret.json を設定してください。")
 
 def pick_channel(order_type: str) -> str:
-    """
-    オーダー作成時のチャンネル選択
-    """
-    if order_type == "pattern_a":
-        return SLACK_CHANNEL_TYPE_A or SLACK_CHANNEL_TEST or SLACK_DEFAULT_CHANNEL or ""
-    if order_type == "pattern_b":
-        return SLACK_CHANNEL_TYPE_B or SLACK_CHANNEL_TEST or SLACK_DEFAULT_CHANNEL or ""
-    # test / その他
+    if order_type == "pattern_a": return SLACK_CHANNEL_TYPE_A or SLACK_DEFAULT_CHANNEL
+    if order_type == "pattern_b": return SLACK_CHANNEL_TYPE_B or SLACK_DEFAULT_CHANNEL
     return SLACK_CHANNEL_TEST or SLACK_DEFAULT_CHANNEL or ""
 
-
-def pick_status_update_channel(payload: StatusUpdatePayload) -> str:
-    """
-    ステータス更新時のスレッド投稿先チャンネル。
-    いまのところ test チャンネル固定でOK。
-    （将来オーダー種別ごとに分ける場合はここを拡張）
-    """
-    # この関数は新しいエンドポイントでは使われないが、後方互換性のため残す
-    return SLACK_DEFAULT_CHANNEL or ""
-
-
-def build_order_text(payload: OrderCreatedPayload) -> str:
-    """
-    オーダー作成時の最初の Slack メッセージ本文
-    """
-    lines: List[str] = []
+def build_order_text(payload: OrderCreatedPayload, upload_error: str = None) -> str:
+    lines = []
     if SLACK_MENTION_GROUP_ID:
         lines.append(f"<!subteam^{SLACK_MENTION_GROUP_ID}>")
     
-    # CC (Moved to top)
     if payload.ccString:
         lines.append(f"cc: {payload.ccString}")
 
     lines.append("キャスティングオーダーがありました。")
-    lines.append("")
+    
+    # ★★★ 追加: 追加オーダー用のシンプルメッセージ作成ロジック ★★★
+    if payload.isAdditionalOrder:
+        lines = []
+        if SLACK_MENTION_GROUP_ID:
+            lines.append(f"<!subteam^{SLACK_MENTION_GROUP_ID}>")
+        
+        lines.append("追加オーダーのお知らせ")
+        lines.append("")
 
-    # 撮影日
+        # プロジェクトごとにまとめる
+        projects = {}
+        project_ordered = []
+        for order in payload.orders:
+            if order.projectName not in projects:
+                projects[order.projectName] = {}
+                project_ordered.append(order.projectName)
+            if order.roleName not in projects[order.projectName]:
+                projects[order.projectName][order.roleName] = []
+            projects[order.projectName][order.roleName].append(order)
+        
+        for p_name in project_ordered:
+            lines.append(f"【{p_name}】")
+            for r_name, cands in projects[p_name].items():
+                # 指定フォーマット「役名：キャスト名」
+                # 複数候補がいる場合は / 区切りなどで表示
+                cast_names = " / ".join([c.castName for c in cands])
+                lines.append(f"{r_name}：{cast_names}")
+                
+                # 競合アラートがあれば表示
+                for c in cands:
+                    if c.conflictInfo:
+                        lines.append(f"  🚨 {c.conflictInfo}")
+            lines.append("")
+
+        if upload_error:
+            lines.append(f"\n⚠️ PDF送信エラー: {upload_error}")
+
+        return "\n".join(lines).rstrip()
+    # ★★★ 追加ここまで ★★★
+    
+    # ★ PDFエラー時の追加メッセージ
+    if upload_error:
+        lines.append("")
+        lines.append("⚠️ **PDF送信に失敗したので、Slackにて手動での添付をお願いします**")
+        lines.append(f"Reason: {upload_error}")
+    
+    lines.append("")
     lines.append("`撮影日`")
     for d in payload.dateRanges:
         lines.append(f"・{d}")
     lines.append("")
 
-    # アカウント
     lines.append("`アカウント`")
     lines.append(payload.accountName or "未入力")
     lines.append("")
 
-    # Group by Project -> Role
     projects = {}
+    project_ordered = []
     for order in payload.orders:
-        p_name = order.projectName
-        if p_name not in projects:
-            projects[p_name] = {}
-        
-        r_name = order.roleName
-        if r_name not in projects[p_name]:
-            projects[p_name][r_name] = []
-        
-        projects[p_name][r_name].append(order)
+        if order.projectName not in projects:
+            projects[order.projectName] = {}
+            project_ordered.append(order.projectName)
+        if order.roleName not in projects[order.projectName]:
+            projects[order.projectName][order.roleName] = []
+        projects[order.projectName][order.roleName].append(order)
 
-    for p_name, roles in projects.items():
-        lines.append("`作品名`")
-        lines.append(p_name)
-        lines.append("`役名`")
-        lines.append(f"【{p_name}】") # Keep the bracketed project name as per user request/current behavior
-        for r_name, candidates in roles.items():
-            lines.append(f"  {r_name}") # Role Name
-            # Sort by rank
-            candidates.sort(key=lambda x: x.rank)
-            for cand in candidates:
-                cast_display = cand.castName
-                if cand.slack_user_id:
-                    cast_display = f"<@{cand.slack_user_id}>"
-                lines.append(f"    第{cand.rank}候補：{cast_display}")
-        lines.append("") # Empty line between projects
+    lines.append("`作品名`")
+    lines.append("/".join(project_ordered) if project_ordered else "未定")
+    lines.append("")
 
+    lines.append("`役名`")
+    for p_name in project_ordered:
+        lines.append(f"【{p_name}】") 
+        for r_name, cands in projects[p_name].items():
+            lines.append(f"  {r_name}")
+            cands.sort(key=lambda x: x.rank)
+            for cand in cands:
+                cast_disp = f"<@{cand.slack_user_id}>" if cand.slack_user_id else cand.castName
+                line = f"    第{cand.rank}候補：{cast_disp}"
+                lines.append(line)
+                
+                # ★ 競合メッセージの表示（重要）
+                if cand.conflictInfo:
+                    lines.append(f"    🚨 {cand.conflictInfo}") # 絵文字をつけて目立たせる
 
-    # Notionリンク
+    lines.append("")
     lines.append("`Notionリンク`")
     if payload.projectId:
-        # プロパティから Notion ページ URL を組み立て
-        page_id = payload.projectId.replace("-", "")
-        lines.append(f"https://www.notion.so/{page_id}")
+        lines.append(f"https://www.notion.so/{payload.projectId.replace('-', '')}")
     else:
         lines.append("未設定")
-    # フッター
-    lines.append("")
-    lines.append("--------------------------------------------------")
-    lines.append("※このメッセージはシステムから自動送信されています。")
-    
+        
+    lines.append("\n--------------------------------------------------")
     return "\n".join(lines).rstrip()
-
 
 def build_status_update_text(payload: StatusUpdatePayload) -> str:
     """
@@ -303,12 +309,84 @@ async def sync_to_notion_via_gas(payload: StatusUpdatePayload):
     except Exception as e:
         print(f"Notion sync exception: {e}")
 
-# --- エンドポイント ---
+# --- Auth Endpoints (NEW) ---
 
+@app.post("/api/auth/login")
+async def auth_login(request: Request):
+    try:
+        data = await request.json()
+        auth_code = data.get("code")
+        if not auth_code:
+            raise HTTPException(status_code=400, detail="No code provided")
+
+        # ★変更: ヘルパー関数を使用
+        client_config = get_client_config()
+
+        flow = Flow.from_client_config(
+            client_config,
+            scopes=SCOPES,
+            redirect_uri="postmessage" # JS popup flow uses this
+        )
+        flow.fetch_token(code=auth_code)
+        creds = flow.credentials
+
+        response = JSONResponse({"ok": True, "access_token": creds.token})
+        
+        # 1日間有効なRefresh TokenをCookieにセット
+        if creds.refresh_token:
+            response.set_cookie(
+                key="refresh_token",
+                value=creds.refresh_token,
+                httponly=True,
+                secure=True,
+                samesite="lax",
+                max_age=86400 # 1 day
+            )
+        return response
+    except Exception as e:
+        print(f"Login error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/auth/refresh")
+async def auth_refresh(request: Request):
+    refresh_token = request.cookies.get("refresh_token")
+    if not refresh_token:
+        raise HTTPException(status_code=401, detail="No session")
+
+    try:
+        # ★変更: ヘルパー関数を使用
+        client_config = get_client_config()
+        
+        # Manually refresh
+        creds = google.oauth2.credentials.Credentials(
+            None,
+            refresh_token=refresh_token,
+            token_uri=client_config["web"]["token_uri"],
+            client_id=client_config["web"]["client_id"],
+            client_secret=client_config["web"]["client_secret"],
+            scopes=SCOPES
+        )
+        
+        req = google.auth.transport.requests.Request()
+        creds.refresh(req)
+        
+        return {"ok": True, "access_token": creds.token}
+    except Exception as e:
+        print(f"Refresh failed: {e}")
+        res = JSONResponse({"ok": False}, status_code=401)
+        res.delete_cookie("refresh_token")
+        return res
+
+@app.post("/api/auth/logout")
+async def auth_logout():
+    res = JSONResponse({"ok": True})
+    res.delete_cookie("refresh_token")
+    return res
+
+# --- API Endpoints ---
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
     return Response(status_code=204)
-
 
 @app.get("/config")
 async def get_config():
@@ -320,128 +398,95 @@ async def get_config():
         "slack_default_channel": SLACK_DEFAULT_CHANNEL,
     }
 
-
 @app.post("/api/notify/order_created")
 async def notify_order_created(
     files: List[UploadFile] = File(None), 
     payload_str: str = Form(...)
 ):
-    print(f"--- Debug: Backend Received ---")
-    if files:
-        print(f"Files count: {len(files)}")
-    else:
-        print("⚠️ No files received")
-
     try:
         data = json.loads(payload_str)
         payload = OrderCreatedPayload(**data)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Payload validation failed: {e}")
+        raise HTTPException(status_code=400, detail=f"Payload error: {e}")
 
     if not SLACK_BOT_TOKEN or not slack_client:
-        raise HTTPException(status_code=500, detail="Slack BOT TOKEN未設定")
+        raise HTTPException(status_code=500, detail="Slack Config Error")
 
     channel = pick_channel(payload.orderType)
-    text = build_order_text(payload)
-
+    
     ts = None
     permalink = ""
     upload_error = None
-    
-    # ★追加: PDF送信が成功したかどうかを判定するフラグ
-    is_file_sent = False 
+    sent_via_upload = False
 
-    try:
-        # ---------------------------------------------------------
-        # パターンA: ファイルがある場合 (files.upload_v2 で一括送信)
-        # ---------------------------------------------------------
-        if files and len(files) > 0:
-            print(f"Uploading {len(files)} files via upload_v2...")
-
-            upload_list = []
-            for file in files:
-                await file.seek(0)
-                content = await file.read()
-                upload_list.append({
-                    "file": content,
-                    "filename": file.filename,
-                    "title": file.filename
-                })
-
-            try:
-                response = await slack_client.files_upload_v2(
-                    channel=channel,
-                    initial_comment=text,
-                    file_uploads=upload_list,
-                    thread_ts=payload.slackThreadTs if payload.slackThreadTs else None
-                )
-                
-                # ★ここを通ればSlackへの送信自体は成功している
-                is_file_sent = True 
-
-                # タイムスタンプの取得（取得できなくても送信は成功しているのでエラーにはしない）
-                # Slack SDKのレスポンスは辞書型でない場合があるので .data や直接アクセスを試みる
-                data_resp = response.data if hasattr(response, 'data') else response
-                
-                if isinstance(data_resp, dict):
-                    uploaded_files = data_resp.get("files", [])
-                    if uploaded_files:
-                        shares = uploaded_files[0].get("shares", {}).get("public", {})
-                        if channel in shares:
-                            ts = shares[channel][0].get("ts")
-                
-                if not ts and isinstance(data_resp, dict):
-                     ts = data_resp.get("ts")
-
-            except Exception as e:
-                print(f"Slack upload failed: {e}")
-                upload_error = str(e)
-                # ファイル送信に失敗した場合のみ、下のテキスト送信へ進むために is_file_sent は False のまま
-
-        # ---------------------------------------------------------
-        # パターンB: ファイルがない、またはアップロード失敗時 (chat.postMessage)
-        # ---------------------------------------------------------
-        # ★修正: 「tsが無い」ではなく「ファイル送信が成功していない」場合に実行
-        if not is_file_sent:
-            print("Sending text only (Fallback)...")
-            final_text = text
-            if upload_error:
-                final_text += f"\n\n⚠️ ファイル添付エラー: {upload_error}"
-
-            response = await slack_client.chat_postMessage(
+    # 1. PDF添付を試みる
+    if files and len(files) > 0:
+        print(f"Uploading {len(files)} files...")
+        upload_list = []
+        for file in files:
+            await file.seek(0)
+            content = await file.read()
+            upload_list.append({
+                "file": content,
+                "filename": file.filename,
+                "title": file.filename
+            })
+        
+        try:
+            # テキストは initial_comment として送信
+            # エラー時メッセージはないので build_order_text(payload) だけ
+            initial_text = build_order_text(payload)
+            
+            response = await slack_client.files_upload_v2(
                 channel=channel,
-                text=final_text,
-                thread_ts=payload.slackThreadTs,
-                unfurl_links=False,
-                unfurl_media=False,
+                initial_comment=initial_text,
+                file_uploads=upload_list,
+                thread_ts=payload.slackThreadTs
             )
-            ts = response.get("ts")
+            sent_via_upload = True
+            
+            # tsの取得 (v2レスポンス構造対応)
+            # files_upload_v2 は file オブジェクトを返すが、メッセージのtsは深い階層にある場合がある
+            # 簡易的に、エラーが出ていなければ成功とみなすが、permalink取得のために頑張る
+            if hasattr(response, 'data') and isinstance(response.data, dict):
+                 # 単一ファイルの場合など構造が変わるが、汎用的に取得
+                 files_resp = response.data.get("files", [])
+                 if files_resp:
+                     shares = files_resp[0].get("shares", {}).get("public", {})
+                     if channel in shares:
+                         ts = shares[channel][0].get("ts")
 
-        # --- Permalink取得 (tsがある場合) ---
-        if ts:
-            try:
-                perm_res = await slack_client.chat_getPermalink(channel=channel, message_ts=ts)
-                if perm_res["ok"]:
-                    permalink = perm_res["permalink"]
-            except Exception as e:
-                print(f"Failed to get permalink: {e}")
+        except Exception as e:
+            print(f"PDF Upload Failed: {e}")
+            upload_error = str(e)
+            # 失敗したフラグを立てて、次のテキスト送信フォールバックへ
 
-        return {"ok": True, "ts": ts, "permalink": permalink, "upload_error": upload_error}
+    # 2. PDFがない、または失敗した場合 -> テキストのみ送信
+    if not sent_via_upload:
+        # エラーがあればメッセージに含める
+        fallback_text = build_order_text(payload, upload_error)
+        
+        try:
+            res = await slack_client.chat_postMessage(
+                channel=channel,
+                text=fallback_text,
+                thread_ts=payload.slackThreadTs
+            )
+            ts = res.get("ts")
+        except Exception as e:
+            print(f"Text Message Failed: {e}")
+            raise HTTPException(status_code=500, detail="Slack送信失敗")
 
-    except Exception as e:
-        print(f"Error in notify_order_created: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    # Permalink取得
+    if ts:
+        try:
+            perm = await slack_client.chat_getPermalink(channel=channel, message_ts=ts)
+            permalink = perm.get("permalink", "")
+        except:
+            pass
 
-# --- Special Order (External/Internal) ---
-# --- Special Order (External/Internal) ---
-class SpecialOrderPayload(BaseModel):
-    orderType: Literal["external", "internal"]
-    title: str
-    dates: List[str] # Changed from date to dates
-    startTime: str
-    endTime: str
-    castIds: List[str]
-    ordererEmail: str
+    return {"ok": True, "ts": ts, "permalink": permalink, "upload_error": upload_error}
+
 
 @app.post("/api/notify/special_order")
 async def notify_special_order(payload: SpecialOrderPayload):
@@ -469,9 +514,6 @@ async def notify_special_order(payload: SpecialOrderPayload):
                 if len(row) < 5: continue
                 
                 # キャストマップ構築 (内部キャストID -> 情報)
-                # ※内部キャストDBのA列をIDとして使うか、別途ID列があるか確認が必要ですが
-                # ここではA列をID兼名前として扱う（またはキャストリストのマッピングでカバー）
-                # 今回は主に「Email -> SlackID」のために使う
                 email = str(row[3]).strip()
                 slack_id = str(row[4]).strip()
                 
@@ -766,35 +808,6 @@ async def add_shooting_contact(payload: dict):
         raise HTTPException(status_code=500, detail="SHOOTING_CONTACT_SHEET_ID missing")
 
     # 行データの構築
-    # A: CastingID
-    # B: Account
-    # C: Project
-    # D: NotionID
-    # E: Main/Sub (NEW)
-    # F: Role
-    # G: Cast
-    # H: Type
-    # I: Date
-    # J: Note
-    # K: Status
-    # L: IN
-    # E: RoleName
-    # F: CastName
-    # G: CastType
-    # H: ShootDate
-    # I: Note
-    # J: Status
-    # K: IN
-    # L: OUT
-    # M: Location (集合場所)
-    # N: Address (住所)
-    # O: MakingURL
-    # P: Cost (新規)
-    # Q: PostDate
-    # R: UpdatedBy
-    # S: UpdatedAt
-    # T: Main/Sub (Main/Other)
-    
     row = [
         payload["castingId"],        # A (0)
         payload["account"],          # B (1)
@@ -811,9 +824,7 @@ async def add_shooting_contact(payload: dict):
         payload.get("location", ""), # M (12)
         payload.get("address", ""),  # N (13)
         payload.get("makingUrl", ""),# O (14)
-        
         payload.get("cost", ""),     # P (15) ★追加（金額）
-        
         payload.get("postDate", ""), # Q (16) 旧P
         payload.get("updatedBy", ""),# R (17) 旧Q
         payload.get("updatedAt", ""),# S (18) 旧R
@@ -833,18 +844,6 @@ async def add_shooting_contact(payload: dict):
         print(f"Error in add_shooting_contact: {e}")
         raise HTTPException(status_code=500, detail=f"append failed: {e}")
 
-    castingId: str
-    status: Optional[str] = None
-    inTime: Optional[str] = None
-    outTime: Optional[str] = None
-    location: Optional[str] = None
-    address: Optional[str] = None
-    makingUrl: Optional[str] = None
-    postDate: Optional[str] = None
-    mainSub: Optional[str] = None
-    cost: Optional[str] = None # ★追加
-    poUuid: Optional[str] = None # ★追加 (U列)
-
 @app.post("/api/shooting_contact/update")
 async def update_shooting_contact_status(payload: ShootingContactUpdateItem):
     sheet_id = os.getenv("SHOOTING_CONTACT_SHEET_ID")
@@ -863,48 +862,6 @@ async def update_shooting_contact_status(payload: ShootingContactUpdateItem):
         except ValueError:
             raise HTTPException(status_code=404, detail="Casting ID not found")
             
-        # Update fields if provided
-        # Column mapping:
-        # J(9): Status
-        # K(10): IN
-        # L(11): OUT
-        # M(12): Location
-        # N(13): Address
-        # O(14): MakingURL
-        # P(15): Cost
-        # Q(16): PostDate
-        # R(17): UpdatedBy
-        # S(18): UpdatedAt
-        # T(19): Main/Sub
-        # U(20): PO UUID (New)
-
-        updates = []
-        if payload.status is not None:
-            updates.append({"range": f"J{row_idx}", "values": [[payload.status]]})
-        if payload.inTime is not None:
-            updates.append({"range": f"K{row_idx}", "values": [[payload.inTime]]})
-        if payload.outTime is not None:
-            updates.append({"range": f"L{row_idx}", "values": [[payload.outTime]]})
-        if payload.location is not None:
-            updates.append({"range": f"M{row_idx}", "values": [[payload.location]]})
-        if payload.address is not None:
-            updates.append({"range": f"N{row_idx}", "values": [[payload.address]]})
-        if payload.makingUrl is not None:
-            updates.append({"range": f"O{row_idx}", "values": [[payload.makingUrl]]})
-        if payload.cost is not None:
-            updates.append({"range": f"P{row_idx}", "values": [[payload.cost]]})
-        if payload.postDate is not None:
-            updates.append({"range": f"Q{row_idx}", "values": [[payload.postDate]]})
-        if payload.mainSub is not None:
-            updates.append({"range": f"T{row_idx}", "values": [[payload.mainSub]]})
-        if payload.poUuid is not None:
-            updates.append({"range": f"U{row_idx}", "values": [[payload.poUuid]]})
-
-        # Update Timestamp (S列)
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        updates.append({"range": f"S{row_idx}", "values": [[now_str]]})
-        # S(18): Main/Sub
-        
         updates = []
         if payload.status is not None:
             updates.append({"range": f"J{row_idx}", "values": [[payload.status]]})
@@ -928,9 +885,16 @@ async def update_shooting_contact_status(payload: ShootingContactUpdateItem):
             updates.append({"range": f"Q{row_idx}", "values": [[payload.postDate]]})
             
         # T列: Main/Sub (だいぶ後ろにずれた)
-        # ※以前はS列でしたが、Pに挿入されたので T (20列目) になります
         if payload.mainSub is not None:
             updates.append({"range": f"T{row_idx}", "values": [[payload.mainSub]]})
+
+        # U列: PO UUID
+        if payload.poUuid is not None:
+            updates.append({"range": f"U{row_idx}", "values": [[payload.poUuid]]})
+
+        # Update Timestamp (S列)
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        updates.append({"range": f"S{row_idx}", "values": [[now_str]]})
             
         if updates:
             await sheet.batch_update(updates)

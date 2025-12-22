@@ -382,131 +382,119 @@
         else el.textContent = `選択中の期間: ${selectedDates[0]} ~ ${selectedDates[selectedDates.length - 1]} (${selectedDates.length}日間)`;
       }
 
-      // ========= Auth =========
+      // ========= Auth State =========
+      let codeClient;     // ←追加: Code Flow用
+
+      // ========= Auth Functions =========
       function gapiLoaded() { gapi.load('client', initializeGapiClient); }
-      async function initializeGapiClient() { await gapi.client.init({ apiKey: API_KEY, discoveryDocs: DISCOVERY_DOCS }); gapiInited = true; maybeCheckTokenAndLoad(); }
+      async function initializeGapiClient() {
+        await gapi.client.init({ apiKey: API_KEY, discoveryDocs: DISCOVERY_DOCS });
+        gapiInited = true;
+        maybeCheckSession(); // ロード時にセッションチェック
+      }
+
       function gisLoaded() {
-        tokenClient = google.accounts.oauth2.initTokenClient({
+        // ★変更: initCodeClient を使用
+        codeClient = google.accounts.oauth2.initCodeClient({
           client_id: CLIENT_ID,
           scope: SCOPES,
-          callback: (tokenResponse) => {
-            if (tokenResponse && tokenResponse.access_token) {
-              // トークンが取れたらセット
-              gapi.client.setToken(tokenResponse);
-              localStorage.setItem('gapi_granted', 'true');
+          ux_mode: 'popup',
+          callback: async (response) => {
+            if (response.code) {
+              // 1. サーバーにコードを送り、Cookie(Refresh Token)をセットしてもらう
+              showLoader(true);
+              try {
+                const res = await fetch('/api/auth/login', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ code: response.code })
+                });
 
-              // ★修正: セッション開始時刻の管理
-              // 「明示的なログイン（ポップアップ）」か「自動更新」かで分岐
-              // まだセッション開始時刻がない（初回ログイン）なら現在時刻をセット
-              if (!localStorage.getItem('session_start')) {
-                localStorage.setItem('session_start', Date.now());
-              }
-
-              // 待機していた処理があれば解決（ensureAuth用）
-              if (window.authResolver) {
-                window.authResolver(tokenResponse);
-                window.authResolver = null;
-                window.authRejecter = null;
-              }
-
-              // UI更新（データ読み込み開始）
-              updateUI(true);
-            } else {
-              // エラー時
-              if (window.authRejecter) {
-                window.authRejecter(tokenResponse);
-                window.authResolver = null;
-                window.authRejecter = null;
+                if (res.ok) {
+                  const data = await res.json();
+                  // 2. 返ってきたアクセストークンをgapiにセット
+                  gapi.client.setToken({ access_token: data.access_token });
+                  updateUI(true);
+                  showMessage('サインインしました');
+                } else {
+                  throw new Error('Server login failed');
+                }
+              } catch (e) {
+                console.error(e);
+                showMessage('ログインに失敗しました', 'error');
+                updateUI(false);
+              } finally {
+                showLoader(false);
               }
             }
           },
-          // エラーハンドリング（ポップアップが閉じられた場合など）
-          error_callback: (nonTokenError) => {
-            console.error('OAuth error:', nonTokenError);
-            if (window.authRejecter) {
-              window.authRejecter(nonTokenError);
-              window.authResolver = null;
-              window.authRejecter = null;
-            }
-          }
         });
         gisInited = true;
-        maybeCheckTokenAndLoad();
+        maybeCheckSession();
       }
 
-      async function ensureAuth() {
-        // 1. まず24時間経過チェック
-        const sessionStart = localStorage.getItem('session_start');
-        const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+      // ★追加: ページロード時にサーバーのCookieを使ってトークン再発行を試みる
+      async function maybeCheckSession() {
+        if (!gapiInited || !gisInited) return;
 
-        if (sessionStart && (Date.now() - parseInt(sessionStart, 10) > ONE_DAY_MS)) {
-          console.log("Session expired > 24h");
-          handleSignoutClick();
-          return false; // 期限切れのためfalseを返す
-        }
+        // すでにトークンがあるなら何もしない
+        if (gapi.client.getToken()) return;
 
-        // 2. 現在のトークンが有効かチェック（簡易的）
-        const token = gapi.client.getToken();
-        if (token && currentUser) {
-          // トークンがあっても、有効期限(1時間)が切れている可能性があるので
-          // 本当はここでAPIを叩いて401ならリフレッシュ、という流れがベストだが
-          // 簡易的に「トークンがあれば一旦OK」とし、APIエラー時にリロードを促す運用とするか、
-          // もしくは念の為サイレントリフレッシュをかける。
-          // ここでは「ユーザー体験」優先で、そのまま通す（エラーが出たらユーザーが再操作する）
-          return true;
-        }
-
-        // 3. トークンがない、または無効そうな場合はサイレントリフレッシュを試みる
+        console.log("Checking session...");
         try {
-          await new Promise((resolve, reject) => {
-            window.authResolver = resolve;
-            window.authRejecter = reject;
-            // prompt: '' (空文字) は、可能ならサイレント、だめならポップアップ挙動になる場合があるが
-            // 明示的に prompt: 'none' で裏で取れるか試すのがスマート
-            tokenClient.requestAccessToken({ prompt: 'none' });
-          });
-          return true;
+          const res = await fetch('/api/auth/refresh');
+          if (res.ok) {
+            const data = await res.json();
+            if (data.access_token) {
+              console.log("Session restored!");
+              gapi.client.setToken({ access_token: data.access_token });
+              updateUI(true);
+              return;
+            }
+          }
         } catch (e) {
-          console.warn("Silent refresh via ensureAuth failed, trying consent...", e);
-          // サイレントが失敗したら（クッキー切れなど）、ポップアップを出す
-          try {
-            await new Promise((resolve, reject) => {
-              window.authResolver = resolve;
-              window.authRejecter = reject;
-              tokenClient.requestAccessToken({ prompt: 'consent' });
-            });
+          console.warn("Session check failed", e);
+        }
+        // セッションがなければ未ログイン状態
+        updateUI(false);
+      }
+
+      function handleAuthClick() {
+        // ポップアップを出して認証コードを取得
+        codeClient.requestCode();
+      }
+
+      async function handleSignoutClick() {
+        const token = gapi.client.getToken();
+        if (token !== null) {
+          gapi.client.setToken('');
+        }
+        // サーバー側のCookie削除
+        try { await fetch('/api/auth/logout', { method: 'POST' }); } catch (e) { }
+
+        updateUI(false);
+        showMessage('サインアウトしました', 'info');
+      }
+
+      // APIコールの前に確実にトークンがあるかチェックする関数
+      async function ensureAuth() {
+        const token = gapi.client.getToken();
+        if (token && token.access_token) return true;
+
+        // トークンがない場合、裏でリフレッシュを試みる
+        try {
+          const res = await fetch('/api/auth/refresh');
+          if (res.ok) {
+            const data = await res.json();
+            gapi.client.setToken({ access_token: data.access_token });
             return true;
-          } catch (err) {
-            return false;
           }
+        } catch (e) {
+          console.error(e);
         }
+        return false;
       }
-      // ★修正: ページ読み込み時のセッションチェックと自動復帰
-      function maybeCheckTokenAndLoad() {
-        if (gapiInited && gisInited) {
-          const sessionStart = localStorage.getItem('session_start');
-          const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
-          // セッション開始記録がない、または24時間以上経過している場合
-          if (!sessionStart || (Date.now() - parseInt(sessionStart, 10) > ONE_DAY_MS)) {
-            console.log('Session expired or not found. requiring login.');
-            handleSignoutClick(); // 期限切れなのでログアウト状態にする
-            showLoader(false);
-            return;
-          }
-
-          // 24時間以内なら、サイレントリフレッシュ（画面遷移なしでトークン再取得）を試みる
-          console.log('Session valid. Attempting silent refresh...');
-          try {
-            // prompt: 'none' を指定することで、ポップアップを出さずに再ログインを試みる
-            tokenClient.requestAccessToken({ prompt: 'none', login_hint: currentUser?.email });
-          } catch (e) {
-            console.warn('Silent refresh failed', e);
-            updateUI(false);
-            showLoader(false);
-          }
-        }
-      }
       async function updateUI(isAuthorized) {
         const auth = document.getElementById('authorize_button'), out = document.getElementById('signout_button');
         if (auth) auth.style.display = isAuthorized ? 'none' : 'block';
@@ -524,8 +512,7 @@
             }
 
             switchView('casting-view');
-          }
-          catch (err) {
+          } catch (err) {
             console.error('Auth/Data failed', err);
             const msg = err.result?.error?.message || err.message || JSON.stringify(err);
             alert(`データ読み込みに失敗しました。\nエラー: ${msg}\n\nOKを押すとサインアウトします。`);
@@ -535,28 +522,10 @@
           currentUser = null; isAdmin = false;
           document.getElementById('user-name')?.classList.add('hidden');
           document.querySelectorAll('.admin-only').forEach(el => el.classList.add('hidden'));
-          // Hide all views
           document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
           showMessage('サインインして、キャスト管理を始めましょう。', 'info');
           showLoader(false);
         }
-      }
-      function handleAuthClick() {
-        // Explicit login -> Reset session start
-        localStorage.setItem('session_start', Date.now());
-        tokenClient?.requestAccessToken({ prompt: 'consent' });
-      }
-      function handleSignoutClick() {
-        const token = gapi.client.getToken();
-        if (token !== null) {
-          google.accounts.oauth2.revoke(token.access_token, () => { });
-          gapi.client.setToken('');
-        }
-        localStorage.removeItem('gapi_token');
-        localStorage.removeItem('gapi_granted');
-        localStorage.removeItem('session_start'); // ★これを確実に消す
-        updateUI(false);
-        showMessage('サインアウトしました', 'info');
       }
       async function getUserProfile() {
         const res = await gapi.client.oauth2.userinfo.get(); currentUser = res.result;
@@ -569,13 +538,20 @@
         try {
           const res = await gapi.client.sheets.spreadsheets.values.batchGet({
             spreadsheetId: SPREADSHEET_ID,
-            ranges: ['キャストリスト!A2:N', 'キャスティングリスト!A2:T', '権限管理リスト!A2:B', '撮影スケ_キャスト!A2:Z', '新香盤撮影リスト!A2:F', '内部キャストDB!A2:E'],
+            ranges: [
+              'キャストリスト!A2:N',
+              'キャスティングリスト!A2:T',
+              '権限管理リスト!A2:B',
+              '撮影スケ_キャスト!A2:Z', // 修正: 範囲を広めに確保
+              '新香盤撮影リスト!A2:F',
+              '内部キャストDB!A2:E'
+            ],
           });
           const vr = res.result.valueRanges;
+
           if (!vr || vr.length < 3) throw new Error('必要なシートが見つかりません。');
 
-          // Casts
-          // 2-1. キャスト読み込み部分の修正
+          // Casts (No change needed here, reusing existing logic below)
           const castValues = vr[0].values || [];
           castData = castValues
             .filter(r => r && (r[1]?.trim() || r[0]?.trim()))
@@ -587,7 +563,7 @@
               const agency = row[4]?.trim() || 'フリー';
               let imageUrl = row[5]?.trim() || '';
               if (imageUrl && !imageUrl.toLowerCase().startsWith('http')) {
-                imageUrl = ''; // Invalid URL, treat as empty
+                imageUrl = '';
               }
               const appearance = Number.parseInt(row[6], 10);
               const email = row[7]?.trim() || '';
@@ -597,7 +573,6 @@
               const isInternal = castType === '内部';
               const slackMentionId = row[10]?.trim() || '';
 
-              // ★追加: SNSリンク (L, M, N)
               const snsX = row[11]?.trim() || '';
               const snsInsta = row[12]?.trim() || '';
               const snsTiktok = row[13]?.trim() || '';
@@ -609,36 +584,28 @@
                 isInternal,
                 internalType: castType,
                 slackMentionId,
-                snsX, snsInsta, snsTiktok // ★追加
+                snsX, snsInsta, snsTiktok
               };
             });
 
           // Casting
-          // 2-1. キャスティングデータ展開時の修正
           const castMap = new Map(castData.map(c => [c.castId, c]));
           const castingValues = vr[1].values || [];
 
           castingData = castingValues.map(row => {
             const start = normalizeDateString(row?.[6] || '');
             const end = normalizeDateString(row?.[7] || '');
-            const priority = Number.parseInt(row?.[17], 10);
             const castId = row?.[4] || '';
-
-            // ★修正: マップからキャスト情報を取得し、isInternalを設定
             const base = castMap.get(castId);
             const isInternal = base?.isInternal ?? false;
 
             let slackThreadTs = row?.[11] || '';
             const slackPermalink = row?.[12] || '';
-
-            // もし thread_ts が空 or 10桁の整数っぽい場合は、permalink から復元を試みる
             if ((!slackThreadTs || /^\d{10}$/.test(slackThreadTs)) && slackPermalink) {
-              // 例: https://.../p1763537866119239 から 1763537866.119239 を復元
-              // クエリパラメータがあってもマッチするように $ を削除
               const m = slackPermalink.match(/p(\d{16})/);
               if (m) {
-                const raw = m[1]; // "1763537866119239"
-                slackThreadTs = raw.slice(0, 10) + "." + raw.slice(10); // "1763537866.119239"
+                const raw = m[1];
+                slackThreadTs = raw.slice(0, 10) + "." + raw.slice(10);
               }
             }
 
@@ -656,21 +623,21 @@
               note: row?.[10] || '',
               slackThreadTs: slackThreadTs,
               slackPermalink: slackPermalink,
-              mainSub: row?.[13] || 'その他',     // N列
-              calendarEventId: row?.[14] || '', // O列
-              projectId: row?.[15] || '',       // P列
-              lastUpdated: row?.[16] || '',     // Q列
-              updatedBy: row?.[17] || '',       // R列
-              castPriority: Number.parseInt(row?.[18], 10), // S列
+              mainSub: row?.[13] || 'その他',
+              calendarEventId: row?.[14] || '',
+              projectId: row?.[15] || '',
+              lastUpdated: row?.[16] || '',
+              updatedBy: row?.[17] || '',
+              castPriority: Number.parseInt(row?.[18], 10),
               isInternal,
-              castType: row?.[19] || (isInternal ? '内部' : '外部'), // T列
-              email: row?.[20] || '', // U列 (New: Email)
-              cost: row?.[21] || '',  // V列 (New: Cost)
-              structureData: row?.[22] ? JSON.parse(row[22]) : null // W列 (Structure)
+              castType: row?.[19] || (isInternal ? '内部' : '外部'),
+              email: row?.[20] || '',
+              cost: row?.[21] || '',
+              structureData: row?.[22] ? JSON.parse(row[22]) : null
             };
           });
 
-          // Roles (A:email, B:role[admin/viewer])
+          // Roles
           const perm = vr[2].values || [];
           const roleByEmail = new Map();
           for (const row of (perm || [])) {
@@ -681,71 +648,43 @@
           const myEmail = (currentUser?.email || '').toLowerCase();
           isAdmin = (roleByEmail.get(myEmail) === 'admin');
 
-          // Shooting Schedule (from new sheet)
+          // 4. Shooting Schedule (撮影スケ_キャスト) の復旧
+          // 4. Shooting Schedule (撮影スケ_キャスト) の修正
           if (vr.length > 3 && vr[3].values) {
             const scheduleValues = vr[3].values || [];
-            // Header: Date, Account, Project, Role, Cast, IN, OUT, Location, Address, NotionURL, Emergency
-            // Index:  0     1        2        3     4     5   6    7         8        9          10
 
+            // ★修正: A列=キャスト名, B列以降=日付
             shootingScheduleData.clear(); // Map<castId, Set<dateString>>
 
-            // Parse [CastName, Date1, Date2, ...] format? 
-            // Wait, the previous code I saw in the diff was parsing `row` which seemed to be `scheduleValues[i]`.
-            // Let's assume the structure is what was there before or what I intended.
-            // The previous valid code (before my failed edit) was:
-            /*
-            const scheduleValues = vr[3].values || [];
-            shootingScheduleData = new Map();
             scheduleValues.forEach(row => {
-              const date = row[0];
-              const castName = row[4]; 
-              const cast = castData.find(c => c.name === castName);
-              if (cast && date) {
-                 if (!shootingScheduleData.has(cast.castId)) shootingScheduleData.set(cast.castId, new Set());
-                 shootingScheduleData.get(cast.castId).add(normalizeDateString(date));
-              }
-            });
-            */
-            // BUT, the code I tried to insert in step 285 was:
-            /*
-            for (let i = 0; i < scheduleValues.length; i++) {
-              const row = scheduleValues[i];
-              const castName = row[0]?.trim();
-              if (!castName) continue;
-              const castObj = castData.find(c => c.name === castName);
-              if (!castObj) continue;
-              const dates = new Set();
-              for (let j = 1; j < row.length; j++) { ... }
-            }
-            */
-            // This suggests the sheet format might be `CastName, Date1, Date2...`. 
-            // However, the comment in the code says: `Header: Date, Account, Project, Role, Cast...`
-            // I should stick to the format implied by the comments in the file if possible, OR the one that was working.
-            // The file content I viewed in Step 282 shows:
-            // `// Header: Date, Account, Project, Role, Cast, IN, OUT, Location, Address, NotionURL, Emergency`
-            // So I will use that logic.
+              const castName = row[0]?.trim(); // A列: キャスト名
+              if (!castName) return;
 
-            shootingScheduleData = new Map();
-            scheduleValues.forEach(row => {
-              // row[0] is Date, row[4] is CastName
-              const date = normalizeDateString(row[0]);
-              const castName = row[4]?.trim();
-              if (!date || !castName) return;
-
+              // 名前からキャストIDを逆引き
               const cast = castData.find(c => c.name === castName);
               if (cast) {
-                if (!shootingScheduleData.has(cast.castId)) shootingScheduleData.set(cast.castId, new Set());
-                shootingScheduleData.get(cast.castId).add(date);
-              } else {
-                console.warn(`Shooting Schedule: Cast not found for name "${castName}"`);
+                if (!shootingScheduleData.has(cast.castId)) {
+                  shootingScheduleData.set(cast.castId, new Set());
+                }
+
+                // B列(インデックス1)以降をすべて日付としてチェック
+                for (let i = 1; i < row.length; i++) {
+                  const dateRaw = row[i];
+                  if (!dateRaw) continue;
+
+                  const date = normalizeDateString(dateRaw);
+                  if (date) {
+                    shootingScheduleData.get(cast.castId).add(date);
+                  }
+                }
               }
             });
+            console.log("Shooting Schedule Loaded:", shootingScheduleData.size, "casts active.");
           }
 
           // New Shooting List (新香盤撮影リスト)
           if (vr.length > 4 && vr[4].values) {
             const slValues = vr[4].values || [];
-            // A:PageID, B:Title, C:Date, D:Team, E:CD, F:FD
             window.shootingListData = slValues.map(row => ({
               pageId: row[0] || '',
               title: row[1] || '',
@@ -758,11 +697,10 @@
             window.shootingListData = [];
           }
 
-          // Internal Cast DB (for Slack CC)
-          window.internalCastMap = new Map(); // Name -> UserID
+          // Internal Cast DB
+          window.internalCastMap = new Map();
           if (vr.length > 5 && vr[5].values) {
             const icValues = vr[5].values || [];
-            // A:Name, E:UserID
             icValues.forEach(row => {
               const name = row[0]?.trim();
               const uid = row[4]?.trim();
@@ -772,24 +710,16 @@
             });
           }
 
-          // Helper to extract NotionID from URL
-          function extractNotionIdFromUrl(url) {
-            if (!url) return "";
-            // Match 32 hex chars (with optional hyphens) usually at the end of path or before query
-            // Example: https://www.notion.so/Page-Title-abcdef1234567890abcdef1234567890?pvs=4
-            // Regex looks for 32 hex chars
-            const match = url.match(/([a-fA-F0-9]{32})/);
-            if (match) return match[1];
-            return ""; // Return empty if not found
-          }
           renderCalendar();
           renderFilters();
-          renderShootingList(); // ★Added
+          renderShootingList();
           displayAvailableCasts();
+
         } catch (err) {
           console.error('Data loading error:', err);
-          showMessage('データの取得に失敗しました', 'error');
-          throw err;
+          showMessage('データの取得に失敗しました。再ログインしてください。', 'error');
+          // エラー時はログアウト扱いにする
+          handleSignoutClick();
         } finally { showLoader(false); }
       }
 
@@ -869,42 +799,54 @@
       }
 
       // ========= Casting view =========
+      // 修正: チーム名を返すように変更
       function getCastStatusForDates(castId, dates) {
-        if (!dates || dates.length === 0) return { isProvisional: false, isConfirmed: false, isShooting: false, isNG: false };
+        if (!dates || dates.length === 0) return {
+          isProvisional: false, isConfirmed: false, isShooting: false, isNG: false,
+          holdingTeams: []
+        };
+
         const targetDates = dates.map(normalizeDateString).filter(v => v != null);
         const targetEpochs = targetDates.map(toEpochDay);
 
         let isProv = false, isConf = false, isShooting = false, isNG = false;
+        let is1st = false, is2nd = false;
+        const holdingTeams = new Set(); // 仮押さえしているチーム名
+
         const CONFIRM_STATUS = ['決定', 'OK'];
-        const NG_STATUS = ['NG']; // ★追加
+        const NG_STATUS = ['NG'];
         const PROV_STATUS = [
-          '仮キャスティング',
-          'オーダー待ち',
-          'オーダー待ち（仮キャスティング）',
-          '打診中',
-          '条件つきOK',
+          '仮キャスティング', 'オーダー待ち', 'オーダー待ち（仮キャスティング）',
+          '打診中', '条件つきOK'
         ];
 
         const bookings = castingData.filter(c => c.castId === castId && c.startDay != null && c.endDay != null);
 
         for (const day of targetEpochs) {
-          if (isConf) break;
+          if (isConf) break; // 決定済みならループ終了
+
           for (const b of bookings) {
             if (day >= b.startDay && day <= b.endDay) {
               if (CONFIRM_STATUS.includes(b.status)) {
                 isConf = true;
-              }
-              else if (NG_STATUS.includes(b.status)) {
-                isNG = true; // ★NGフラグ
-              }
-              else if (PROV_STATUS.includes(b.status)) {
+              } else if (NG_STATUS.includes(b.status)) {
+                isNG = true;
+              } else if (PROV_STATUS.includes(b.status)) {
                 isProv = true;
+                // チーム名（アカウント名）を記録
+                if (b.accountName) {
+                  holdingTeams.add(b.accountName);
+                }
               }
+
+              // 順位チェック
+              if (b.status.includes('第1候補')) is1st = true;
+              if (b.status.includes('第2候補')) is2nd = true;
             }
           }
         }
 
-        // Check shooting schedule if not already confirmed
+        // 撮影スケジュールのチェック
         if (!isConf) {
           const schedule = shootingScheduleData.get(castId);
           if (schedule) {
@@ -917,22 +859,17 @@
           }
         }
 
-        // Check for 1st/2nd candidates
-        let is1st = false, is2nd = false;
-        if (isProv) {
-          for (const day of targetEpochs) {
-            for (const b of bookings) {
-              if (day >= b.startDay && day <= b.endDay) {
-                if (b.status.includes('第1候補')) is1st = true;
-                if (b.status.includes('第2候補')) is2nd = true;
-              }
-            }
-          }
-        }
-
-        return { isProvisional: isProv, isConfirmed: isConf, isShooting: isShooting, isNG: isNG, is1st, is2nd };
+        return {
+          isProvisional: isProv,
+          isConfirmed: isConf,
+          isShooting: isShooting,
+          isNG: isNG,
+          is1st, is2nd,
+          holdingTeams: Array.from(holdingTeams) // 配列にして返す
+        };
       }
 
+      // 修正: チーム名を表示するようにバッジ生成ロジックを変更
       function displayAvailableCasts() {
         const list = document.getElementById('cast-list'); if (!list) return;
         list.innerHTML = '';
@@ -960,7 +897,6 @@
             comfortBtn.classList.remove('bg-blue-500', 'text-white');
           }
         }
-
 
         if (selectedDates.length === 0) {
           list.innerHTML = `<p class="col-span-full text-center text-gray-500 pt-10">日付を選択すると、キャストが表示されます。</p>`;
@@ -996,53 +932,49 @@
           const stat = getCastStatusForDates(cast.castId, selectedDates);
           const inCart = !!cart[cast.castId];
 
-          let badge = '', solid = false;
           let badges = [];
+          let solid = false;
 
           if (stat.isConfirmed) {
             solid = true;
             badges.push(`<span class="bg-red-500 text-white text-xs font-semibold px-2 py-1 rounded-full">決定</span>`);
-          } else if (stat.isNG) { // ★NGの場合
-            solid = true; // ボタン無効化
+          } else if (stat.isNG) {
+            solid = true;
             badges.push(`<span class="bg-gray-600 text-white text-xs font-semibold px-2 py-1 rounded-full">NG</span>`);
           } else {
+            // 仮キャスティングの場合、チーム名を表示
             if (stat.isProvisional) {
-              badges.push(`<span class="bg-yellow-400 text-yellow-800 text-xs font-semibold px-2 py-1 rounded-full">仮キャスティング中</span>`);
-            }
-            if (stat.is1st) {
-              badges.push(`<span class="bg-orange-400 text-white text-xs font-semibold px-2 py-1 rounded-full">第1候補あり</span>`);
-            }
-            if (stat.is2nd) {
-              badges.push(`<span class="bg-orange-300 text-white text-xs font-semibold px-2 py-1 rounded-full">第2候補あり</span>`);
+              if (stat.holdingTeams.length > 0) {
+                // 例: "TeamA 仮キャス中"
+                stat.holdingTeams.forEach(team => {
+                  badges.push(`<span class="bg-yellow-400 text-yellow-900 text-xs font-semibold px-2 py-1 rounded-full shadow-sm border border-yellow-500">${team} 仮押さえ</span>`);
+                });
+              } else {
+                badges.push(`<span class="bg-yellow-400 text-yellow-800 text-xs font-semibold px-2 py-1 rounded-full">仮キャスティング中</span>`);
+              }
             }
             if (stat.isShooting) {
-              badges.push(`<span class="bg-cyan-400 text-cyan-800 text-xs font-semibold px-2 py-1 rounded-full">制作稼働あり</span>`);
+              badges.push(`<span class="bg-cyan-400 text-cyan-900 text-xs font-semibold px-2 py-1 rounded-full border border-cyan-500">撮影稼働あり</span>`);
             }
           }
 
-          const badgeHtml = badges.length > 0 ? `<div class="absolute top-2 right-2 flex flex-col gap-1 items-end">${badges.join('')}</div>` : '';
+          const badgeHtml = badges.length > 0 ? `<div class="absolute top-2 right-2 flex flex-col gap-1 items-end z-10">${badges.join('')}</div>` : '';
 
           const disabled = solid || inCart;
-          const buttonLabel = stat.isConfirmed ? 'キャスティング不可' : (stat.isNG ? 'NG' : (inCart ? '仮キャスティング（追加済）' : '仮キャスティング'));
+          const buttonLabel = stat.isConfirmed ? 'キャスティング不可' : (stat.isNG ? 'NG' : (inCart ? '追加済み' : '仮キャスティング'));
 
           const meta = []; if (cast.gender) meta.push(cast.gender); if (Number.isFinite(cast.age)) meta.push(`${cast.age}歳`); meta.push(`出演: ${cast.appearanceCount}回`);
 
           // Helper to format Drive URL for embedding
           function formatDriveUrl(url) {
             if (!url) return "";
-            // Check if it's a Drive URL
             if (url.includes("drive.google.com")) {
-              // Extract ID
               let id = "";
               const idMatch = url.match(/id=([^&]+)/);
               const fileMatch = url.match(/\/file\/d\/([^/]+)/);
-
               if (idMatch) id = idMatch[1];
               else if (fileMatch) id = fileMatch[1];
-
               if (id) {
-                // Use thumbnail endpoint which is more permissible for embedding
-                // sz=w800 requests a width of 800px
                 return `https://drive.google.com/thumbnail?id=${id}&sz=w800`;
               }
             }
@@ -1050,17 +982,14 @@
           }
 
           const card = document.createElement('div');
-          // ★クリック可能にする (cursor-pointer)
-          card.className = `bg-white rounded-lg shadow-md overflow-hidden flex flex-col relative ${(solid || inCart) ? 'opacity-50' : ''} cursor-pointer hover:shadow-lg transition-shadow`;
+          card.className = `bg-white rounded-lg shadow-md overflow-hidden flex flex-col relative ${(solid || inCart) ? 'opacity-50' : ''} cursor-pointer hover:shadow-lg transition-shadow group`;
 
-          // ★カード全体クリックイベント
           card.addEventListener('click', (e) => {
-            // ボタンクリック時はモーダルを開かない
             if (e.target.closest('.add-to-cart-btn')) return;
             openCastDetailModal(cast.castId);
           });
 
-          const displayUrl = formatDriveUrl(cast.imageUrl);
+          const displayUrl = cast.imageUrl ? formatDriveUrl(cast.imageUrl) : '';
 
           card.innerHTML = `
         ${displayUrl ? `<img src="${displayUrl}" alt="${cast.name}" class="w-full h-48 object-cover" referrerpolicy="no-referrer">`
@@ -1075,8 +1004,8 @@
         </div>
         <div class="p-4 pt-0 mt-auto">
           <button data-cast-id="${cast.castId}" class="add-to-cart-btn w-full ${disabled ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-500 hover:bg-blue-600'} text-white font-bold py-2 px-4 rounded-lg transition" ${disabled ? 'disabled' : ''}>${buttonLabel}</button>
-          ${(!solid && stat.isShooting) ? '<p class="mt-2 text-xs text-cyan-700">※別件の撮影が入っています。</p>' : ''}
-          ${(!solid && stat.isProvisional) ? '<p class="mt-2 text-xs text-amber-700">※仮キャスティングが入っています。</p>' : ''}
+          ${(!solid && stat.isShooting) ? '<p class="mt-2 text-xs text-cyan-700 font-bold">※別件の撮影が入っています。</p>' : ''}
+          ${(!solid && stat.isProvisional) ? '<p class="mt-2 text-xs text-amber-700 font-bold">※仮キャスティングが入っています。</p>' : ''}
         </div>`;
           list.appendChild(card);
         });
@@ -1287,8 +1216,14 @@
                 if (records.length === 0) continue;
                 hasRecordsInAccount = true;
 
+                // ★追加: 更新者の表示
+                const updaters = [...new Set(records.map(r => r.updatedBy).filter(Boolean))];
+                const updaterLabel = updaters.length > 0
+                  ? `<span class="ml-2 text-xs text-gray-500 font-normal">by ${updaters.join(', ')}</span>`
+                  : '';
+
                 tempAccountHtml += `<div class="ml-4 mt-2">
-                    <h5 class="font-medium text-gray-700 mb-1">${project}</h5>`;
+                    <h5 class="font-medium text-gray-700 mb-1">${project}${updaterLabel}</h5>`;
 
                 const tableRows = records.map(it => {
                   const cast = castData.find(c => c.castId === it.castId);
@@ -1697,6 +1632,9 @@
           showMessage('追加オーダーの元となる代表レコードが見つかりません。', 'error');
           return;
         }
+
+        // ★追加: 前回のファイルが残っている可能性があるのでクリア
+        if (cartMeta && cartMeta.pdfFiles) delete cartMeta.pdfFiles;
 
         isAdditionalOrderMode = true;
         additionalOrderContext = {
@@ -2515,6 +2453,14 @@ ${rec.note || "なし"}
       async function confirmProvisionalBookings(confirmationData) {
         const items = Object.values(cart); if (items.length === 0) { showMessage('カートが空です。', 'info'); return; }
 
+        // ★追加: 確認モーダルで待機している間にセッションが切れている可能性があるため再チェック
+        const isAuth = await ensureAuth();
+        if (!isAuth) {
+          alert("認証セッションが切れました。再ログインしてください。");
+          handleAuthClick();
+          return;
+        }
+
         const accountName = cartMeta.account || '';
         const notionUrl = cartMeta.notionUrl || '';
         const projectNames = cartMeta.projectNames || [];
@@ -2529,6 +2475,29 @@ ${rec.note || "なし"}
         const internalEvents = [];
 
         try {
+          // 【重要】送信直前に最新データを強制取得（排他制御のため）
+          await fetchCastingDataFromSheet();
+
+          // コンフリクトチェック
+          const errors = [];
+          for (const it of items) {
+            const workTitle = it.projectName || projectNames[0];
+            const duplicate = castingData.find(c =>
+              c.projectName === workTitle &&
+              c.castId === it.cast.castId &&
+              !['キャンセル', 'NG'].includes(c.status)
+            );
+            if (duplicate) {
+              errors.push(`・${it.cast.name} は、作品「${workTitle}」で既に登録されています（ステータス: ${duplicate.status} / 担当: ${duplicate.updatedBy || '不明'}）`);
+            }
+          }
+
+          if (errors.length > 0) {
+            showLoader(false);
+            alert("【エラー：重複オーダー】\n以下のキャストは、タッチの差で既に同作品に登録されました。\n\n" + errors.join("\n"));
+            return;
+          }
+
           const values = []; const nowISO = new Date().toISOString();
           const castingIdPrefix = `pc_${Date.now()}`; let seq = 1;
           const ordersForSlack = [];
@@ -2562,6 +2531,45 @@ ${rec.note || "なし"}
               : 'オーダー待ち';
 
             // Slack 通知用の注文情報
+            // ★追加: 競合チェック (Conflict Check)
+            // ★★★ 修正箇所: 競合チェックロジックの強化 ★★★
+            let conflictMsg = null;
+
+            // it.dates は ['2025-01-01', '2025-01-02'...] の形式
+            for (const d of it.dates) {
+              // 比較対象の日付 Epoch
+              const targetEpoch = toEpochDay(d);
+
+              const conflict = castingData.find(c => {
+                // 自分自身のカート内の重複は除外（同じプロジェクトへの追加などはOKとする場合）
+                if (c.projectName === workTitle) return false;
+
+                // キャンセルやNGは競合とみなさない
+                if (['キャンセル', 'NG', 'キャスティング完了'].includes(c.status)) return false;
+
+                // キャストID一致
+                if (c.castId !== it.cast.castId) return false;
+
+                // 日付重複チェック (Epoch変換して比較)
+                // c.startDate / c.endDate は "YYYY-MM-DD"
+                const startEpoch = toEpochDay(c.startDate);
+                const endEpoch = toEpochDay(c.endDate);
+
+                if (startEpoch === null || endEpoch === null || targetEpoch === null) return false;
+
+                // 範囲が重なるか check
+                return (targetEpoch >= startEpoch && targetEpoch <= endEpoch);
+              });
+
+              if (conflict) {
+                const holder = conflict.accountName || '他チーム';
+                conflictMsg = `※先に【${holder}】がキャスティングしています（${conflict.status}）。`;
+                console.log("Conflict found:", conflictMsg, conflict); // デバッグ用ログ
+                break;
+              }
+            }
+            // ★★★ 修正ここまで ★★★
+
             ordersForSlack.push({
               castingId: `${castingIdPrefix}_${seq}`,
               roleName: it.roleName || '',
@@ -2571,6 +2579,7 @@ ${rec.note || "なし"}
               note: it.note || '',
               projectName: workTitle,
               slack_user_id: slackMentionId || null,
+              conflictInfo: conflictMsg // ★追加
             });
 
             for (const rg of ranges) {
@@ -3639,7 +3648,7 @@ ${roleName}：${item.cast.name}`;
             <div style="text-align: right; margin-bottom: 20px; font-size: 10px; color: #666;">No. ${data.uuid || ''}</div>
             
             <div style="font-size: 14px; margin-bottom: 20px;">
-              <span style="font-size: 14px; border-bottom: 1px solid #000;">${data.castName} 様</span>
+              <span style="font-size: 14px;">${data.castName} 様</span>
             </div>
 
             <p style="margin-bottom: 5px;">ご快諾いただきましたドラマ出演の件につきまして、下記の通り発注申し上げます。<br>
@@ -3654,7 +3663,7 @@ ${roleName}：${item.cast.name}`;
             </div>
 
             <div style="margin-bottom: 20px;">
-              <p style="font-weight: bold; border-bottom: 1px solid #000; display: inline-block; margin-bottom: 10px;">【お取引条件】</p>
+              <p style="font-weight: bold; display: inline-block; margin-bottom: 10px;">【お取引条件】</p>
               <p style="margin: 2px 0;">支払条件： 月末締め翌月末払い</p>
               <p style="margin: 2px 0;">支払方法： ご指定の銀行口座へお振込み</p>
               <p style="margin: 2px 0;">秘密保持： 本件に関わる脚本内容、撮影情報、共演者情報等は、公式解禁まで第三者への漏洩（SNS含む）を禁止とさせていただきます。</p>
@@ -3984,12 +3993,12 @@ ${roleName}：${item.cast.name}`;
         renderNewCartModal(modal);
       }
       window.submitNewOrder = async function () {
-        // 1. Auth Check (Auto-Login attempt / サイレントリフレッシュ)
-        // ここでトークン切れなら再取得を試みます
+        // 1. Auth Check
         const isAuth = await ensureAuth();
         if (!isAuth) {
-          alert("ログアウト状態のため送信できません。再ログインしてください。");
-          handleAuthClick();
+          // サイレント更新に失敗した場合は、明示的にログインボタンを押してもらう
+          alert("セッションの有効期限が切れました。\nログイン画面を表示しますので、再ログインしてください。");
+          handleAuthClick(); // ユーザーのアクション（ボタンクリック）の流れで呼べばポップアップはブロックされません
           return;
         }
 
@@ -4232,7 +4241,7 @@ ${roleName}：${item.cast.name}`;
         const internalEvents = [];
         const tempAssignments = {};
 
-        // Collect all orders & Apply Intimacy Note
+        // Collect all orders & Apply Intimacy Note & Conflict Check
         const allOrders = data.projects.flatMap(proj =>
           proj.roles.flatMap((role, rIdx) =>
             role.castIds.map((cid, cIdx) => {
@@ -4245,6 +4254,49 @@ ${roleName}：${item.cast.name}`;
                 finalNote = "【インティマシーシーンあり】\n" + finalNote;
               }
 
+              // ★★★ 追加: 競合チェック (Conflict Check) for Drag & Drop Cart ★★★
+              let conflictMsg = null;
+              const targetEpoch = toEpochDay(shootDate);
+
+              if (targetEpoch) {
+                const conflict = castingData.find(c => {
+                  // 1. ステータスチェック（キャンセル・NG・完了は無視）
+                  if (['キャンセル', 'NG', 'キャスティング完了'].includes(c.status)) return false;
+
+                  // 2. キャストIDチェック
+                  if (c.castId !== cid) return false;
+
+                  // 3. 日付重複チェック
+                  const startEpoch = toEpochDay(c.startDate);
+                  const endEpoch = toEpochDay(c.endDate);
+                  if (startEpoch === null || endEpoch === null) return false;
+
+                  // 範囲外なら無視
+                  if (targetEpoch < startEpoch || targetEpoch > endEpoch) return false;
+
+                  // 4. 「自分自身の更新」を除外するロジック
+                  const isSameAccount = (c.accountName || '').trim() === (data.accountName || '').trim();
+                  const isSameProject = (c.projectName || '').trim() === (proj.title || '').trim();
+
+                  if (isSameAccount && isSameProject) {
+                    return false; // 自分自身の追加オーダーなので競合ではない
+                  }
+
+                  // ここまで来たら競合
+                  return true;
+                });
+
+                if (conflict) {
+                  const holder = conflict.accountName || '他チーム';
+                  conflictMsg = `※先に【${holder}】がキャスティングしています（${conflict.status}）。`;
+                  console.warn("🚨 Conflict Detected (D&D):", {
+                    me: { account: data.accountName, project: proj.title, date: shootDate },
+                    other: { account: conflict.accountName, project: conflict.projectName, status: conflict.status }
+                  });
+                }
+              }
+              // ★★★ 追加ここまで ★★★
+
               return {
                 castingId: 'temp_' + Date.now() + '_' + Math.random(),
                 roleName: role.name,
@@ -4255,7 +4307,8 @@ ${roleName}：${item.cast.name}`;
                 slack_user_id: isInternal ? cast.slackMentionId : null,
                 castId: cid,
                 cast: cast,
-                type: role.type
+                type: role.type,
+                conflictInfo: conflictMsg // ★追加: これでSlack通知にアラートが含まれます
               };
             })
           )
@@ -4264,6 +4317,28 @@ ${roleName}：${item.cast.name}`;
         if (allOrders.length === 0) return;
 
         const uniqueProjectNames = [...new Set(data.projects.map(p => p.title))].join(' / ');
+
+        // ★★★ 追加: ProjectIDに基づくスレッド自動引き当てロジック ★★★
+        let targetThreadTs = data.slackThreadTs || null;
+        let isAdditional = !!targetThreadTs; // 明示的に渡された場合は追加扱い
+
+        // スレッドIDが未指定だが、ProjectID (=PageID) がある場合 -> 過去ログを検索
+        // Note: processNewOrderFromModal passes 'pageId', not 'projectId'
+        const searchProjectId = data.projectId || data.pageId;
+
+        if (!targetThreadTs && searchProjectId) {
+          // castingDataから「同じProjectID」かつ「スレッドIDを持っている」レコードを探す
+          const existingRecord = castingData.find(c =>
+            c.projectId === searchProjectId && c.slackThreadTs
+          );
+
+          if (existingRecord) {
+            console.log("Found existing thread for ProjectID:", searchProjectId, existingRecord.slackThreadTs);
+            targetThreadTs = existingRecord.slackThreadTs;
+            isAdditional = true; // 自動引き当て成功 -> 追加オーダー扱い
+          }
+        }
+        // ★★★ 追加ここまで ★★★
 
         // 2. Send Slack Notification Payload
         const payload = {
@@ -4278,15 +4353,16 @@ ${roleName}：${item.cast.name}`;
             rank: o.rank,
             note: o.note,
             projectName: o.projectName,
-            slack_user_id: o.slack_user_id
+            slack_user_id: o.slack_user_id,
+            conflictInfo: o.conflictInfo
           })),
           orderType: "pattern_a",
           ccString: data.ccString || "",
-          slackThreadTs: data.slackThreadTs || null
+          slackThreadTs: targetThreadTs, // ★変更: 自動取得したIDを使用
+          isAdditionalOrder: isAdditional // ★追加: フラグを送信
         };
 
         // PDF Upload - Multiple Files Support
-        // ■■■ 修正: 退避したファイル情報を使用 ■■■
         // まず退避データを確認し、なければDOMから取得（フォールバック）
         let files = cartMeta.pdfFiles;
 
@@ -4294,30 +4370,21 @@ ${roleName}：${item.cast.name}`;
           const fileInput = document.getElementById('order-pdf-file');
           files = fileInput?.files;
         }
-        // ■■■ 修正ここまで ■■■
 
         const formData = new FormData();
         formData.append('payload_str', JSON.stringify(payload));
 
-        // 【修正】複数ファイルをループしてFormDataに追加
         if (files && files.length > 0) {
           for (let i = 0; i < files.length; i++) {
             formData.append('files', files[i], files[i].name);
           }
         }
 
-        // ■ 追加: デバッグ用ログ出力（コンソールで確認用）
-        console.log("--- Debug: FormData Sending Check ---");
-        let fileCount = 0;
-        for (let pair of formData.entries()) {
-          if (pair[0] === 'files') {
-            fileCount++;
-            console.log(`Key: ${pair[0]}, File: ${pair[1].name}, Size: ${pair[1].size}`);
-          } else {
-            console.log(`Key: ${pair[0]}, Value: [Payload String]`);
-          }
-        }
-        if (fileCount === 0) console.warn("⚠️ FormDataにファイルが含まれていません！");
+        // Debug Log
+        console.log("--- Sending Order ---", {
+          threadTs: payload.slackThreadTs,
+          conflictCheck: allOrders.map(o => o.conflictInfo).filter(Boolean)
+        });
 
         let slackThreadTs = '';
         let slackPermalink = '';
@@ -4333,17 +4400,16 @@ ${roleName}：${item.cast.name}`;
           if (!slackRes.ok) throw new Error('Slack notification failed');
           const slackData = await slackRes.json();
 
+          // 追加オーダーの場合は元のスレッドIDを維持、新規なら新しいIDを採用
           slackThreadTs = data.slackThreadTs || slackData.ts;
           slackPermalink = slackData.permalink;
         } catch (e) {
           console.error("Slack notification error:", e);
-          // Slack失敗でもシート書き込みは続行する方針なら続行、そうでなければthrow
-          // ここでは続行しつつエラー表示などのハンドリングが望ましいが、
-          // 既存ロジックに合わせて続行します。
         }
 
         updateProgressBar("スプレッドシートに書き込み中...", 60);
-        // 3. Prepare Sheet Rows (以下、既存コードと同様)
+
+        // 3. Prepare Sheet Rows
         const newRows = [];
         const castGroups = new Map();
         allOrders.forEach(o => {
@@ -4428,6 +4494,13 @@ ${roleName}：${item.cast.name}`;
       window.closeCartModal = function () {
         const modal = document.getElementById('cart-modal');
         if (!modal) return;
+
+        // ★追加: カートを閉じる時に、保存されていたPDFファイル情報を確実にクリアする
+        if (cartMeta && cartMeta.pdfFiles) {
+          delete cartMeta.pdfFiles;
+          console.log("PDF files cleared from memory.");
+        }
+
         modal.classList.add('hidden');
         modal.innerHTML = '';
         // Reset state? Maybe keep it if user accidentally closes?
