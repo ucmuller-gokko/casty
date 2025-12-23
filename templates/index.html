@@ -10,6 +10,9 @@
 
   <title>キャスト管理システム v1.4</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     body {
@@ -141,6 +144,79 @@
   </div>
   <div id="shoot-mail-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center modal-backdrop"></div>
 
+  <!-- No Shooting Selection Popup -->
+  <div id="no-shooting-popup"
+    class="hidden fixed inset-0 z-[70] flex items-center justify-center modal-backdrop bg-black bg-opacity-50">
+    <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm text-center">
+      <h3 class="text-lg font-bold text-gray-800 mb-4">撮影案件が選択されていません</h3>
+      <div class="flex flex-col gap-3">
+        <button id="btn-order-external"
+          class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">外部案件としてオーダーする</button>
+        <button id="btn-order-internal"
+          class="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">社内イベント用にオーダーする</button>
+        <button id="btn-popup-back"
+          class="px-4 py-2 bg-gray-300 text-gray-700 rounded hover:bg-gray-400">撮影選択に戻る</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Special Order Modal -->
+  <div id="special-order-modal"
+    class="hidden fixed inset-0 z-[80] flex items-center justify-center modal-backdrop bg-black bg-opacity-50">
+    <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg">
+      <h3 id="special-order-title" class="text-xl font-bold text-gray-800 mb-4">特別オーダー</h3>
+
+      <div class="mb-4">
+        <label class="block text-sm font-medium text-gray-700 mb-1">タイトル (案件/イベント内容)</label>
+        <input type="text" id="special-order-name" class="w-full border rounded px-3 py-2"
+          placeholder="例: 〇〇CM撮影、〇〇イベント">
+      </div>
+
+      <div class="mb-4">
+        <label class="block text-sm font-medium text-gray-700 mb-1">選択中の日付</label>
+        <div id="special-order-date-list" class="text-sm text-gray-600 bg-gray-50 p-2 rounded max-h-24 overflow-y-auto">
+        </div>
+        <input type="hidden" id="special-order-dates-json">
+      </div>
+
+      <div class="grid grid-cols-2 gap-4 mb-4">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">開始時間</label>
+          <input type="time" id="special-order-start" class="w-full border rounded px-3 py-2">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">終了時間</label>
+          <input type="time" id="special-order-end" class="w-full border rounded px-3 py-2">
+        </div>
+      </div>
+
+      <div class="mb-4">
+        <label class="block text-sm font-medium text-gray-700 mb-1">選択中のキャスト</label>
+        <div id="special-order-cast-list" class="text-sm text-gray-600 bg-gray-50 p-2 rounded"></div>
+      </div>
+
+      <div class="flex justify-end gap-3 mt-6">
+        <button id="btn-special-cancel" class="px-4 py-2 border rounded hover:bg-gray-50">キャンセル</button>
+        <button id="btn-special-submit"
+          class="px-6 py-2 bg-indigo-600 text-white font-bold rounded hover:bg-indigo-700">送信</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="progress-modal"
+    class="hidden fixed inset-0 z-[60] flex items-center justify-center modal-backdrop bg-black bg-opacity-50">
+    <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm text-center">
+      <h3 id="progress-title" class="text-lg font-bold text-gray-800 mb-2">処理中...</h3>
+      <p id="progress-message" class="text-sm text-gray-600 mb-4">しばらくお待ちください</p>
+
+      <div class="w-full bg-gray-200 rounded-full h-4 mb-2 overflow-hidden">
+        <div id="progress-bar-fill" class="bg-blue-600 h-4 rounded-full transition-all duration-300" style="width: 0%">
+        </div>
+      </div>
+      <div id="progress-percent" class="text-xs font-bold text-blue-600">0%</div>
+    </div>
+  </div>
+
   <script>
     document.addEventListener('DOMContentLoaded', () => {
       // ========= Config =========
@@ -152,7 +228,7 @@
         "https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest",
         "https://www.googleapis.com/discovery/v1/apis/oauth2/v2/rest"
       ];
-      const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email';
+      const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/documents';
 
       // ========= State =========
       let tokenClient, gapiInited = false, gisInited = false;
@@ -306,23 +382,119 @@
         else el.textContent = `選択中の期間: ${selectedDates[0]} ~ ${selectedDates[selectedDates.length - 1]} (${selectedDates.length}日間)`;
       }
 
-      // ========= Auth =========
+      // ========= Auth State =========
+      let codeClient;     // ←追加: Code Flow用
+
+      // ========= Auth Functions =========
       function gapiLoaded() { gapi.load('client', initializeGapiClient); }
-      async function initializeGapiClient() { await gapi.client.init({ apiKey: API_KEY, discoveryDocs: DISCOVERY_DOCS }); gapiInited = true; maybeCheckTokenAndLoad(); }
+      async function initializeGapiClient() {
+        await gapi.client.init({ apiKey: API_KEY, discoveryDocs: DISCOVERY_DOCS });
+        gapiInited = true;
+        maybeCheckSession(); // ロード時にセッションチェック
+      }
+
       function gisLoaded() {
-        tokenClient = google.accounts.oauth2.initTokenClient({
-          client_id: CLIENT_ID, scope: SCOPES,
-          callback: (tokenResponse) => { if (tokenResponse.error) throw tokenResponse; localStorage.setItem('gapi_token', JSON.stringify(tokenResponse)); updateUI(true); },
+        // ★変更: initCodeClient を使用
+        codeClient = google.accounts.oauth2.initCodeClient({
+          client_id: CLIENT_ID,
+          scope: SCOPES,
+          ux_mode: 'popup',
+          callback: async (response) => {
+            if (response.code) {
+              // 1. サーバーにコードを送り、Cookie(Refresh Token)をセットしてもらう
+              showLoader(true);
+              try {
+                const res = await fetch('/api/auth/login', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ code: response.code })
+                });
+
+                if (res.ok) {
+                  const data = await res.json();
+                  // 2. 返ってきたアクセストークンをgapiにセット
+                  gapi.client.setToken({ access_token: data.access_token });
+                  updateUI(true);
+                  showMessage('サインインしました');
+                } else {
+                  throw new Error('Server login failed');
+                }
+              } catch (e) {
+                console.error(e);
+                showMessage('ログインに失敗しました', 'error');
+                updateUI(false);
+              } finally {
+                showLoader(false);
+              }
+            }
+          },
         });
-        gisInited = true; maybeCheckTokenAndLoad();
+        gisInited = true;
+        maybeCheckSession();
       }
-      function maybeCheckTokenAndLoad() {
-        if (gapiInited && gisInited) {
-          const stored = localStorage.getItem('gapi_token');
-          if (stored) { gapi.client.setToken(JSON.parse(stored)); updateUI(true); }
-          else { updateUI(false); showLoader(false); }
+
+      // ★追加: ページロード時にサーバーのCookieを使ってトークン再発行を試みる
+      async function maybeCheckSession() {
+        if (!gapiInited || !gisInited) return;
+
+        // すでにトークンがあるなら何もしない
+        if (gapi.client.getToken()) return;
+
+        console.log("Checking session...");
+        try {
+          const res = await fetch('/api/auth/refresh');
+          if (res.ok) {
+            const data = await res.json();
+            if (data.access_token) {
+              console.log("Session restored!");
+              gapi.client.setToken({ access_token: data.access_token });
+              updateUI(true);
+              return;
+            }
+          }
+        } catch (e) {
+          console.warn("Session check failed", e);
         }
+        // セッションがなければ未ログイン状態
+        updateUI(false);
       }
+
+      function handleAuthClick() {
+        // ポップアップを出して認証コードを取得
+        codeClient.requestCode();
+      }
+
+      async function handleSignoutClick() {
+        const token = gapi.client.getToken();
+        if (token !== null) {
+          gapi.client.setToken('');
+        }
+        // サーバー側のCookie削除
+        try { await fetch('/api/auth/logout', { method: 'POST' }); } catch (e) { }
+
+        updateUI(false);
+        showMessage('サインアウトしました', 'info');
+      }
+
+      // APIコールの前に確実にトークンがあるかチェックする関数
+      async function ensureAuth() {
+        const token = gapi.client.getToken();
+        if (token && token.access_token) return true;
+
+        // トークンがない場合、裏でリフレッシュを試みる
+        try {
+          const res = await fetch('/api/auth/refresh');
+          if (res.ok) {
+            const data = await res.json();
+            gapi.client.setToken({ access_token: data.access_token });
+            return true;
+          }
+        } catch (e) {
+          console.error(e);
+        }
+        return false;
+      }
+
       async function updateUI(isAuthorized) {
         const auth = document.getElementById('authorize_button'), out = document.getElementById('signout_button');
         if (auth) auth.style.display = isAuthorized ? 'none' : 'block';
@@ -340,8 +512,7 @@
             }
 
             switchView('casting-view');
-          }
-          catch (err) {
+          } catch (err) {
             console.error('Auth/Data failed', err);
             const msg = err.result?.error?.message || err.message || JSON.stringify(err);
             alert(`データ読み込みに失敗しました。\nエラー: ${msg}\n\nOKを押すとサインアウトします。`);
@@ -351,16 +522,10 @@
           currentUser = null; isAdmin = false;
           document.getElementById('user-name')?.classList.add('hidden');
           document.querySelectorAll('.admin-only').forEach(el => el.classList.add('hidden'));
+          document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
           showMessage('サインインして、キャスト管理を始めましょう。', 'info');
           showLoader(false);
         }
-      }
-      function handleAuthClick() { tokenClient?.requestAccessToken({ prompt: 'consent' }); }
-      function handleSignoutClick() {
-        const token = gapi.client.getToken();
-        if (token !== null) { google.accounts.oauth2.revoke(token.access_token, () => { }); gapi.client.setToken(''); }
-        localStorage.removeItem('gapi_token');
-        updateUI(false); showMessage('サインアウトしました', 'info');
       }
       async function getUserProfile() {
         const res = await gapi.client.oauth2.userinfo.get(); currentUser = res.result;
@@ -373,13 +538,20 @@
         try {
           const res = await gapi.client.sheets.spreadsheets.values.batchGet({
             spreadsheetId: SPREADSHEET_ID,
-            ranges: ['キャストリスト!A2:N', 'キャスティングリスト!A2:T', '権限管理リスト!A2:B', '撮影スケ_キャスト!A2:Z', '新香盤撮影リスト!A2:F', '内部キャストDB!A2:E'],
+            ranges: [
+              'キャストリスト!A2:N',
+              'キャスティングリスト!A2:T',
+              '権限管理リスト!A2:B',
+              '撮影スケ_キャスト!A2:Z', // 修正: 範囲を広めに確保
+              '新香盤撮影リスト!A2:F',
+              '内部キャストDB!A2:E'
+            ],
           });
           const vr = res.result.valueRanges;
+
           if (!vr || vr.length < 3) throw new Error('必要なシートが見つかりません。');
 
-          // Casts
-          // 2-1. キャスト読み込み部分の修正
+          // Casts (No change needed here, reusing existing logic below)
           const castValues = vr[0].values || [];
           castData = castValues
             .filter(r => r && (r[1]?.trim() || r[0]?.trim()))
@@ -391,7 +563,7 @@
               const agency = row[4]?.trim() || 'フリー';
               let imageUrl = row[5]?.trim() || '';
               if (imageUrl && !imageUrl.toLowerCase().startsWith('http')) {
-                imageUrl = ''; // Invalid URL, treat as empty
+                imageUrl = '';
               }
               const appearance = Number.parseInt(row[6], 10);
               const email = row[7]?.trim() || '';
@@ -401,7 +573,6 @@
               const isInternal = castType === '内部';
               const slackMentionId = row[10]?.trim() || '';
 
-              // ★追加: SNSリンク (L, M, N)
               const snsX = row[11]?.trim() || '';
               const snsInsta = row[12]?.trim() || '';
               const snsTiktok = row[13]?.trim() || '';
@@ -413,36 +584,28 @@
                 isInternal,
                 internalType: castType,
                 slackMentionId,
-                snsX, snsInsta, snsTiktok // ★追加
+                snsX, snsInsta, snsTiktok
               };
             });
 
           // Casting
-          // 2-1. キャスティングデータ展開時の修正
           const castMap = new Map(castData.map(c => [c.castId, c]));
           const castingValues = vr[1].values || [];
 
           castingData = castingValues.map(row => {
             const start = normalizeDateString(row?.[6] || '');
             const end = normalizeDateString(row?.[7] || '');
-            const priority = Number.parseInt(row?.[17], 10);
             const castId = row?.[4] || '';
-
-            // ★修正: マップからキャスト情報を取得し、isInternalを設定
             const base = castMap.get(castId);
             const isInternal = base?.isInternal ?? false;
 
             let slackThreadTs = row?.[11] || '';
             const slackPermalink = row?.[12] || '';
-
-            // もし thread_ts が空 or 10桁の整数っぽい場合は、permalink から復元を試みる
             if ((!slackThreadTs || /^\d{10}$/.test(slackThreadTs)) && slackPermalink) {
-              // 例: https://.../p1763537866119239 から 1763537866.119239 を復元
-              // クエリパラメータがあってもマッチするように $ を削除
               const m = slackPermalink.match(/p(\d{16})/);
               if (m) {
-                const raw = m[1]; // "1763537866119239"
-                slackThreadTs = raw.slice(0, 10) + "." + raw.slice(10); // "1763537866.119239"
+                const raw = m[1];
+                slackThreadTs = raw.slice(0, 10) + "." + raw.slice(10);
               }
             }
 
@@ -460,21 +623,21 @@
               note: row?.[10] || '',
               slackThreadTs: slackThreadTs,
               slackPermalink: slackPermalink,
-              mainSub: row?.[13] || 'その他',     // N列
-              calendarEventId: row?.[14] || '', // O列
-              projectId: row?.[15] || '',       // P列
-              lastUpdated: row?.[16] || '',     // Q列
-              updatedBy: row?.[17] || '',       // R列
-              castPriority: Number.parseInt(row?.[18], 10), // S列
+              mainSub: row?.[13] || 'その他',
+              calendarEventId: row?.[14] || '',
+              projectId: row?.[15] || '',
+              lastUpdated: row?.[16] || '',
+              updatedBy: row?.[17] || '',
+              castPriority: Number.parseInt(row?.[18], 10),
               isInternal,
-              castType: row?.[19] || (isInternal ? '内部' : '外部'), // T列
-              email: row?.[20] || '', // U列 (New: Email)
-              cost: row?.[21] || '',  // V列 (New: Cost)
-              structureData: row?.[22] ? JSON.parse(row[22]) : null // W列 (Structure)
+              castType: row?.[19] || (isInternal ? '内部' : '外部'),
+              email: row?.[20] || '',
+              cost: row?.[21] || '',
+              structureData: row?.[22] ? JSON.parse(row[22]) : null
             };
           });
 
-          // Roles (A:email, B:role[admin/viewer])
+          // Roles
           const perm = vr[2].values || [];
           const roleByEmail = new Map();
           for (const row of (perm || [])) {
@@ -485,70 +648,43 @@
           const myEmail = (currentUser?.email || '').toLowerCase();
           isAdmin = (roleByEmail.get(myEmail) === 'admin');
 
-          // Shooting Schedule (from new sheet)
+          // 4. Shooting Schedule (撮影スケ_キャスト) の復旧
+          // 4. Shooting Schedule (撮影スケ_キャスト) の修正
           if (vr.length > 3 && vr[3].values) {
-            console.log("DEBUG: Raw schedule data from sheet:", JSON.stringify(vr[3].values));
             const scheduleValues = vr[3].values || [];
-            // Header: Date, Account, Project, Role, Cast, IN, OUT, Location, Address, NotionURL, Emergency
-            // Index:  0     1        2        3     4     5   6    7         8        9          10
 
+            // ★修正: A列=キャスト名, B列以降=日付
             shootingScheduleData.clear(); // Map<castId, Set<dateString>>
 
-            // Parse [CastName, Date1, Date2, ...] format? 
-            // Wait, the previous code I saw in the diff was parsing `row` which seemed to be `scheduleValues[i]`.
-            // Let's assume the structure is what was there before or what I intended.
-            // The previous valid code (before my failed edit) was:
-            /*
-            const scheduleValues = vr[3].values || [];
-            shootingScheduleData = new Map();
             scheduleValues.forEach(row => {
-              const date = row[0];
-              const castName = row[4]; 
-              const cast = castData.find(c => c.name === castName);
-              if (cast && date) {
-                 if (!shootingScheduleData.has(cast.castId)) shootingScheduleData.set(cast.castId, new Set());
-                 shootingScheduleData.get(cast.castId).add(normalizeDateString(date));
-              }
-            });
-            */
-            // BUT, the code I tried to insert in step 285 was:
-            /*
-            for (let i = 0; i < scheduleValues.length; i++) {
-              const row = scheduleValues[i];
-              const castName = row[0]?.trim();
-              if (!castName) continue;
-              const castObj = castData.find(c => c.name === castName);
-              if (!castObj) continue;
-              const dates = new Set();
-              for (let j = 1; j < row.length; j++) { ... }
-            }
-            */
-            // This suggests the sheet format might be `CastName, Date1, Date2...`. 
-            // However, the comment in the code says: `Header: Date, Account, Project, Role, Cast...`
-            // I should stick to the format implied by the comments in the file if possible, OR the one that was working.
-            // The file content I viewed in Step 282 shows:
-            // `// Header: Date, Account, Project, Role, Cast, IN, OUT, Location, Address, NotionURL, Emergency`
-            // So I will use that logic.
+              const castName = row[0]?.trim(); // A列: キャスト名
+              if (!castName) return;
 
-            shootingScheduleData = new Map();
-            scheduleValues.forEach(row => {
-              // row[0] is Date, row[4] is CastName
-              const date = normalizeDateString(row[0]);
-              const castName = row[4]?.trim();
-              if (!date || !castName) return;
-
+              // 名前からキャストIDを逆引き
               const cast = castData.find(c => c.name === castName);
               if (cast) {
-                if (!shootingScheduleData.has(cast.castId)) shootingScheduleData.set(cast.castId, new Set());
-                shootingScheduleData.get(cast.castId).add(date);
+                if (!shootingScheduleData.has(cast.castId)) {
+                  shootingScheduleData.set(cast.castId, new Set());
+                }
+
+                // B列(インデックス1)以降をすべて日付としてチェック
+                for (let i = 1; i < row.length; i++) {
+                  const dateRaw = row[i];
+                  if (!dateRaw) continue;
+
+                  const date = normalizeDateString(dateRaw);
+                  if (date) {
+                    shootingScheduleData.get(cast.castId).add(date);
+                  }
+                }
               }
             });
+            console.log("Shooting Schedule Loaded:", shootingScheduleData.size, "casts active.");
           }
 
           // New Shooting List (新香盤撮影リスト)
           if (vr.length > 4 && vr[4].values) {
             const slValues = vr[4].values || [];
-            // A:PageID, B:Title, C:Date, D:Team, E:CD, F:FD
             window.shootingListData = slValues.map(row => ({
               pageId: row[0] || '',
               title: row[1] || '',
@@ -557,16 +693,14 @@
               cd: row[4] || '',
               fd: row[5] || ''
             })).filter(item => item.date);
-            console.log("DEBUG: Loaded Shooting List:", window.shootingListData);
           } else {
             window.shootingListData = [];
           }
 
-          // Internal Cast DB (for Slack CC)
-          window.internalCastMap = new Map(); // Name -> UserID
+          // Internal Cast DB
+          window.internalCastMap = new Map();
           if (vr.length > 5 && vr[5].values) {
             const icValues = vr[5].values || [];
-            // A:Name, E:UserID
             icValues.forEach(row => {
               const name = row[0]?.trim();
               const uid = row[4]?.trim();
@@ -574,27 +708,18 @@
                 window.internalCastMap.set(name, uid);
               }
             });
-            console.log("DEBUG: Loaded Internal Cast Map:", window.internalCastMap);
           }
 
-          // Helper to extract NotionID from URL
-          function extractNotionIdFromUrl(url) {
-            if (!url) return "";
-            // Match 32 hex chars (with optional hyphens) usually at the end of path or before query
-            // Example: https://www.notion.so/Page-Title-abcdef1234567890abcdef1234567890?pvs=4
-            // Regex looks for 32 hex chars
-            const match = url.match(/([a-fA-F0-9]{32})/);
-            if (match) return match[1];
-            return ""; // Return empty if not found
-          }
           renderCalendar();
           renderFilters();
-          renderShootingList(); // ★Added
+          renderShootingList();
           displayAvailableCasts();
+
         } catch (err) {
           console.error('Data loading error:', err);
-          showMessage('データの取得に失敗しました', 'error');
-          throw err;
+          showMessage('データの取得に失敗しました。再ログインしてください。', 'error');
+          // エラー時はログアウト扱いにする
+          handleSignoutClick();
         } finally { showLoader(false); }
       }
 
@@ -674,42 +799,54 @@
       }
 
       // ========= Casting view =========
+      // 修正: チーム名を返すように変更
       function getCastStatusForDates(castId, dates) {
-        if (!dates || dates.length === 0) return { isProvisional: false, isConfirmed: false, isShooting: false, isNG: false };
+        if (!dates || dates.length === 0) return {
+          isProvisional: false, isConfirmed: false, isShooting: false, isNG: false,
+          holdingTeams: []
+        };
+
         const targetDates = dates.map(normalizeDateString).filter(v => v != null);
         const targetEpochs = targetDates.map(toEpochDay);
 
         let isProv = false, isConf = false, isShooting = false, isNG = false;
+        let is1st = false, is2nd = false;
+        const holdingTeams = new Set(); // 仮押さえしているチーム名
+
         const CONFIRM_STATUS = ['決定', 'OK'];
-        const NG_STATUS = ['NG']; // ★追加
+        const NG_STATUS = ['NG'];
         const PROV_STATUS = [
-          '仮キャスティング',
-          'オーダー待ち',
-          'オーダー待ち（仮キャスティング）',
-          '打診中',
-          '条件つきOK',
+          '仮キャスティング', 'オーダー待ち', 'オーダー待ち（仮キャスティング）',
+          '打診中', '条件つきOK'
         ];
 
         const bookings = castingData.filter(c => c.castId === castId && c.startDay != null && c.endDay != null);
 
         for (const day of targetEpochs) {
-          if (isConf) break;
+          if (isConf) break; // 決定済みならループ終了
+
           for (const b of bookings) {
             if (day >= b.startDay && day <= b.endDay) {
               if (CONFIRM_STATUS.includes(b.status)) {
                 isConf = true;
-              }
-              else if (NG_STATUS.includes(b.status)) {
-                isNG = true; // ★NGフラグ
-              }
-              else if (PROV_STATUS.includes(b.status)) {
+              } else if (NG_STATUS.includes(b.status)) {
+                isNG = true;
+              } else if (PROV_STATUS.includes(b.status)) {
                 isProv = true;
+                // チーム名（アカウント名）を記録
+                if (b.accountName) {
+                  holdingTeams.add(b.accountName);
+                }
               }
+
+              // 順位チェック
+              if (b.status.includes('第1候補')) is1st = true;
+              if (b.status.includes('第2候補')) is2nd = true;
             }
           }
         }
 
-        // Check shooting schedule if not already confirmed
+        // 撮影スケジュールのチェック
         if (!isConf) {
           const schedule = shootingScheduleData.get(castId);
           if (schedule) {
@@ -722,22 +859,17 @@
           }
         }
 
-        // Check for 1st/2nd candidates
-        let is1st = false, is2nd = false;
-        if (isProv) {
-          for (const day of targetEpochs) {
-            for (const b of bookings) {
-              if (day >= b.startDay && day <= b.endDay) {
-                if (b.status.includes('第1候補')) is1st = true;
-                if (b.status.includes('第2候補')) is2nd = true;
-              }
-            }
-          }
-        }
-
-        return { isProvisional: isProv, isConfirmed: isConf, isShooting: isShooting, isNG: isNG, is1st, is2nd };
+        return {
+          isProvisional: isProv,
+          isConfirmed: isConf,
+          isShooting: isShooting,
+          isNG: isNG,
+          is1st, is2nd,
+          holdingTeams: Array.from(holdingTeams) // 配列にして返す
+        };
       }
 
+      // 修正: チーム名を表示するようにバッジ生成ロジックを変更
       function displayAvailableCasts() {
         const list = document.getElementById('cast-list'); if (!list) return;
         list.innerHTML = '';
@@ -765,7 +897,6 @@
             comfortBtn.classList.remove('bg-blue-500', 'text-white');
           }
         }
-
 
         if (selectedDates.length === 0) {
           list.innerHTML = `<p class="col-span-full text-center text-gray-500 pt-10">日付を選択すると、キャストが表示されます。</p>`;
@@ -799,56 +930,51 @@
 
         filtered.forEach(cast => {
           const stat = getCastStatusForDates(cast.castId, selectedDates);
-          console.log(`DEBUG: Status for ${cast.name} (ID: ${cast.castId}):`, stat); // Log status check
           const inCart = !!cart[cast.castId];
 
-          let badge = '', solid = false;
           let badges = [];
+          let solid = false;
 
           if (stat.isConfirmed) {
             solid = true;
             badges.push(`<span class="bg-red-500 text-white text-xs font-semibold px-2 py-1 rounded-full">決定</span>`);
-          } else if (stat.isNG) { // ★NGの場合
-            solid = true; // ボタン無効化
+          } else if (stat.isNG) {
+            solid = true;
             badges.push(`<span class="bg-gray-600 text-white text-xs font-semibold px-2 py-1 rounded-full">NG</span>`);
           } else {
+            // 仮キャスティングの場合、チーム名を表示
             if (stat.isProvisional) {
-              badges.push(`<span class="bg-yellow-400 text-yellow-800 text-xs font-semibold px-2 py-1 rounded-full">仮キャスティング中</span>`);
-            }
-            if (stat.is1st) {
-              badges.push(`<span class="bg-orange-400 text-white text-xs font-semibold px-2 py-1 rounded-full">第1候補あり</span>`);
-            }
-            if (stat.is2nd) {
-              badges.push(`<span class="bg-orange-300 text-white text-xs font-semibold px-2 py-1 rounded-full">第2候補あり</span>`);
+              if (stat.holdingTeams.length > 0) {
+                // 例: "TeamA 仮キャス中"
+                stat.holdingTeams.forEach(team => {
+                  badges.push(`<span class="bg-yellow-400 text-yellow-900 text-xs font-semibold px-2 py-1 rounded-full shadow-sm border border-yellow-500">${team} 仮押さえ</span>`);
+                });
+              } else {
+                badges.push(`<span class="bg-yellow-400 text-yellow-800 text-xs font-semibold px-2 py-1 rounded-full">仮キャスティング中</span>`);
+              }
             }
             if (stat.isShooting) {
-              badges.push(`<span class="bg-cyan-400 text-cyan-800 text-xs font-semibold px-2 py-1 rounded-full">制作稼働あり</span>`);
+              badges.push(`<span class="bg-cyan-400 text-cyan-900 text-xs font-semibold px-2 py-1 rounded-full border border-cyan-500">撮影稼働あり</span>`);
             }
           }
 
-          const badgeHtml = badges.length > 0 ? `<div class="absolute top-2 right-2 flex flex-col gap-1 items-end">${badges.join('')}</div>` : '';
+          const badgeHtml = badges.length > 0 ? `<div class="absolute top-2 right-2 flex flex-col gap-1 items-end z-10">${badges.join('')}</div>` : '';
 
           const disabled = solid || inCart;
-          const buttonLabel = stat.isConfirmed ? 'キャスティング不可' : (stat.isNG ? 'NG' : (inCart ? '仮キャスティング（追加済）' : '仮キャスティング'));
+          const buttonLabel = stat.isConfirmed ? 'キャスティング不可' : (stat.isNG ? 'NG' : (inCart ? '追加済み' : '仮キャスティング'));
 
           const meta = []; if (cast.gender) meta.push(cast.gender); if (Number.isFinite(cast.age)) meta.push(`${cast.age}歳`); meta.push(`出演: ${cast.appearanceCount}回`);
 
           // Helper to format Drive URL for embedding
           function formatDriveUrl(url) {
             if (!url) return "";
-            // Check if it's a Drive URL
             if (url.includes("drive.google.com")) {
-              // Extract ID
               let id = "";
               const idMatch = url.match(/id=([^&]+)/);
               const fileMatch = url.match(/\/file\/d\/([^/]+)/);
-
               if (idMatch) id = idMatch[1];
               else if (fileMatch) id = fileMatch[1];
-
               if (id) {
-                // Use thumbnail endpoint which is more permissible for embedding
-                // sz=w800 requests a width of 800px
                 return `https://drive.google.com/thumbnail?id=${id}&sz=w800`;
               }
             }
@@ -856,17 +982,14 @@
           }
 
           const card = document.createElement('div');
-          // ★クリック可能にする (cursor-pointer)
-          card.className = `bg-white rounded-lg shadow-md overflow-hidden flex flex-col relative ${(solid || inCart) ? 'opacity-50' : ''} cursor-pointer hover:shadow-lg transition-shadow`;
+          card.className = `bg-white rounded-lg shadow-md overflow-hidden flex flex-col relative ${(solid || inCart) ? 'opacity-50' : ''} cursor-pointer hover:shadow-lg transition-shadow group`;
 
-          // ★カード全体クリックイベント
           card.addEventListener('click', (e) => {
-            // ボタンクリック時はモーダルを開かない
             if (e.target.closest('.add-to-cart-btn')) return;
             openCastDetailModal(cast.castId);
           });
 
-          const displayUrl = formatDriveUrl(cast.imageUrl);
+          const displayUrl = cast.imageUrl ? formatDriveUrl(cast.imageUrl) : '';
 
           card.innerHTML = `
         ${displayUrl ? `<img src="${displayUrl}" alt="${cast.name}" class="w-full h-48 object-cover" referrerpolicy="no-referrer">`
@@ -881,8 +1004,8 @@
         </div>
         <div class="p-4 pt-0 mt-auto">
           <button data-cast-id="${cast.castId}" class="add-to-cart-btn w-full ${disabled ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-500 hover:bg-blue-600'} text-white font-bold py-2 px-4 rounded-lg transition" ${disabled ? 'disabled' : ''}>${buttonLabel}</button>
-          ${(!solid && stat.isShooting) ? '<p class="mt-2 text-xs text-cyan-700">※別件の撮影が入っています。</p>' : ''}
-          ${(!solid && stat.isProvisional) ? '<p class="mt-2 text-xs text-amber-700">※仮キャスティングが入っています。</p>' : ''}
+          ${(!solid && stat.isShooting) ? '<p class="mt-2 text-xs text-cyan-700 font-bold">※別件の撮影が入っています。</p>' : ''}
+          ${(!solid && stat.isProvisional) ? '<p class="mt-2 text-xs text-amber-700 font-bold">※仮キャスティングが入っています。</p>' : ''}
         </div>`;
           list.appendChild(card);
         });
@@ -924,9 +1047,14 @@
 
       // ========= Status view =========
       // refresh=true: 描画前に必ずシートから再取得
+      window.currentStatusTab = 'casting'; // 'casting' (通常) | 'special' (外部/社内)
+
       async function renderCastingStatusView(refresh = false) {
         const view = document.getElementById('status-view');
         if (!view) return;
+
+        // Expose to window for onclick handlers
+        window.renderCastingStatusView = renderCastingStatusView;
 
         if (refresh) {
           try { showLoader(true); await fetchCastingDataFromSheet(); }
@@ -938,24 +1066,34 @@
         const monthStart = new Date(y, m, 1), monthEnd = new Date(y, m + 1, 0);
 
         const header = `
-      <div class="flex items-center justify-between mb-3">
-        <div class="flex items-center gap-2">
-          <button id="status-prev-month" class="px-2 py-1 rounded border bg-white">&lt;</button>
-          <div class="font-semibold">${y}年${m + 1}月</div>
-          <button id="status-next-month" class="px-2 py-1 rounded border bg-white">&gt;</button>
-        </div>
-        <div class="flex items-center gap-3">
-          <label class="inline-flex items-center gap-1 text-sm">
-            <input id="status-show-order-wait" type="checkbox" ${statusOrderWaitOnly ? 'checked' : ''} />
-            <span>オーダー待ちのみ</span>
-          </label>
-          <label class="inline-flex items-center gap-1 text-sm">
-            <input id="status-show-past" type="checkbox" ${showPast ? 'checked' : ''} />
-            <span>過去を表示</span>
-          </label>
-          <button id="status-reload" class="px-2 py-1 rounded border bg-white text-sm">再読込</button>
-        </div>
-      </div>`;
+          <div class="flex space-x-1 border-b mb-4">
+            <button class="px-4 py-2 font-medium text-sm rounded-t-lg border-b-2 transition-colors ${window.currentStatusTab === 'casting' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-gray-500 hover:text-gray-700'}"
+              onclick="window.currentStatusTab = 'casting'; renderCastingStatusView(false);">
+              🎬 通常キャスティング
+            </button>
+            <button class="px-4 py-2 font-medium text-sm rounded-t-lg border-b-2 transition-colors ${window.currentStatusTab === 'special' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-gray-500 hover:text-gray-700'}"
+              onclick="window.currentStatusTab = 'special'; renderCastingStatusView(false);">
+              🏢 外部案件・社内イベント
+            </button>
+          </div>
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2">
+              <button id="status-prev-month" class="px-2 py-1 rounded border bg-white">&lt;</button>
+              <div class="font-semibold">${y}年${m + 1}月</div>
+              <button id="status-next-month" class="px-2 py-1 rounded border bg-white">&gt;</button>
+            </div>
+            <div class="flex items-center gap-3">
+              <label class="inline-flex items-center gap-1 text-sm">
+                <input id="status-show-order-wait" type="checkbox" ${statusOrderWaitOnly ? 'checked' : ''} />
+                <span>オーダー待ちのみ</span>
+              </label>
+              <label class="inline-flex items-center gap-1 text-sm">
+                <input id="status-show-past" type="checkbox" ${showPast ? 'checked' : ''} />
+                <span>過去を表示</span>
+              </label>
+              <button id="status-reload" class="px-2 py-1 rounded border bg-white text-sm">再読込</button>
+            </div>
+          </div>`;
 
         // const ORDER_WAIT_STATUSES = ['オーダー待ち', 'オーダー待ち（仮キャスティング）']; // Moved to global scope
 
@@ -981,7 +1119,7 @@
             const accountGroup = dateGroup.get(accountName);
 
             // Expand structureData if available
-            if (c.structureData && Array.isArray(c.structureData)) {
+            if (c.structureData && Array.isArray(c.structureData) && c.structureData.length > 0) {
               c.structureData.forEach(item => {
                 const pName = item.project || '未定';
                 if (!accountGroup.has(pName)) accountGroup.set(pName, []);
@@ -1008,6 +1146,8 @@
 
         const sortedDates = Array.from(grouped.keys()).sort();
         let html = header;
+        const SPECIAL_ACCOUNTS = ['外部案件', '社内イベント'];
+
         if (sortedDates.length === 0) {
           html += `<p class="text-gray-600">該当月のキャスティング登録はありません。</p>`;
         } else {
@@ -1016,6 +1156,27 @@
             let allRecordsInDate = Array.from(dateGroup.values()).flatMap(acc => Array.from(acc.values()).flat());
             const hasOrderWait = allRecordsInDate.some(it => ORDER_WAIT_STATUSES.includes(it.status));
             if (statusOrderWaitOnly && !hasOrderWait) continue;
+
+            // ★フィルタリング判定 (日付単位で表示するかどうかは、その日付に含まれるアカウントがフィルタに合致するかで決める？
+            // いや、日付ブロックは表示して、その中のアカウントをフィルタリングすべきか？
+            // ユーザー要望: "表示分け（タブ化）" -> タブ切り替えで表示内容が変わる。
+            // 日付ブロックの中にアカウントごとのブロックがある構造。
+            // なので、日付ブロック自体を表示するかどうかは、"フィルタリング後のアカウントが1つでもあるか" で決めるべき。
+
+            const sortedAccounts = Array.from(dateGroup.keys()).sort();
+            const visibleAccounts = sortedAccounts.filter(acc => {
+              const isSpecial = SPECIAL_ACCOUNTS.includes(acc);
+
+              if (window.currentStatusTab === 'special') {
+                // 特別タブ: 特別案件だけを表示
+                return isSpecial;
+              } else {
+                // 通常タブ: 特別案件以外を表示
+                return !isSpecial;
+              }
+            });
+
+            if (visibleAccounts.length === 0) continue; // 表示するアカウントがなければ次の日付へ
 
             html += `
           <div class="mt-6 border rounded-lg overflow-hidden status-date-group" data-date-block="${date}">
@@ -1028,48 +1189,55 @@
             </div>
             <div class="date-body p-2 bg-white" data-date-body="${date}">`;
 
-            const sortedAccounts = Array.from(dateGroup.keys()).sort();
-            for (const account of sortedAccounts) {
+            // ★追加確認: accountHtml生成時のレコードチェック
+            for (const account of visibleAccounts) {
               const accountGroup = dateGroup.get(account);
-              const allRecordsInAccount = Array.from(accountGroup.values()).flat();
-              const baseRec = allRecordsInAccount.find(r => r.slackThreadTs);
 
-              let accountHtml = `<div class="ml-2 border-l-2 border-gray-300 pl-4 py-2">
-            <div class="flex items-center justify-between mb-1">
-              <h4 class="text-lg font-semibold text-gray-800">${account}</h4>
-              ${baseRec ? `
-                <button
-                  class="text-xs px-2 py-1 bg-emerald-100 hover:bg-emerald-200 text-emerald-800"
-                  data-add-order="1"
-                  data-date="${date}"
-                  data-account="${account}"
-                  data-project-id="${baseRec.projectId || ''}"
-                  data-thread-ts="${baseRec.slackThreadTs || ''}"
-                  data-permalink="${baseRec.slackPermalink || ''}"
-                >
-                  ＋追加キャスト
-                </button>
-              ` : ''}
-            </div>`;
-
-              let hasContentForAccount = false;
+              // 特別オーダーの場合、project名は1つしかないことが多いが念の為ループ
               const sortedProjects = Array.from(accountGroup.keys()).sort();
+
+              // アカウント内のレコード有無チェック
+              let hasRecordsInAccount = false;
+
+              // 仮のHTMLバッファ
+              let tempAccountHtml = `<div class="ml-2 border-l-2 border-gray-300 pl-4 py-2">
+                  <div class="flex items-center justify-between mb-1">
+                    <h4 class="text-lg font-semibold text-gray-800">${account}</h4>
+                  </div>`;
+
               for (const project of sortedProjects) {
                 let records = accountGroup.get(project);
+
+                // オーダー待ちフィルタ
                 if (statusOrderWaitOnly) {
                   records = records.filter(it => ORDER_WAIT_STATUSES.includes(it.status));
                 }
-                if (records.length === 0) continue;
-                hasContentForAccount = true;
 
-                accountHtml += `<div class="ml-4 mt-2">
-              <h5 class="font-medium text-gray-700 mb-1">${project}</h5>`;
+                if (records.length === 0) continue;
+                hasRecordsInAccount = true;
+
+                // ★追加: 更新者の表示
+                const updaters = [...new Set(records.map(r => r.updatedBy).filter(Boolean))];
+                const updaterLabel = updaters.length > 0
+                  ? `<span class="ml-2 text-xs text-gray-500 font-normal">by ${updaters.join(', ')}</span>`
+                  : '';
+
+                tempAccountHtml += `<div class="ml-4 mt-2">
+                    <h5 class="font-medium text-gray-700 mb-1">${project}${updaterLabel}</h5>`;
 
                 const tableRows = records.map(it => {
                   const cast = castData.find(c => c.castId === it.castId);
                   const castName = cast?.name || it.castId;
-                  const badgeClass = it.status === '決定' ? 'bg-red-100 text-red-700' : it.status === 'キャンセル' ? 'bg-gray-200 text-gray-700' : it.status === '打診中' ? 'bg-blue-100 text-blue-700' : it.status === '条件つきOK' ? 'bg-emerald-100 text-emerald-700' : it.status === 'NG' ? 'bg-gray-300 text-gray-800' : ORDER_WAIT_STATUSES.includes(it.status) ? 'bg-amber-100 text-amber-800' : 'bg-yellow-100 text-yellow-800';
-                  const rowMutedClass = it.status === 'NG' ? 'opacity-50' : '';
+                  const [badgeClass, rowMutedClass] = (() => {
+                    const s = it.status;
+                    if (s === '決定') return ['bg-red-100 text-red-700', ''];
+                    if (s === 'キャンセル') return ['bg-gray-200 text-gray-700', ''];
+                    if (s === '打診中') return ['bg-blue-100 text-blue-700', ''];
+                    if (s === '条件つきOK') return ['bg-emerald-100 text-emerald-700', ''];
+                    if (s === 'NG') return ['bg-gray-300 text-gray-800', 'opacity-50'];
+                    if (ORDER_WAIT_STATUSES.includes(s)) return ['bg-amber-100 text-amber-800', ''];
+                    return ['bg-yellow-100 text-yellow-800', ''];
+                  })();
 
                   // Order Wait の場合は金額編集可能に
                   let costDisplay = it.cost ? '¥' + Number(it.cost).toLocaleString() : '-';
@@ -1101,7 +1269,7 @@
                 </tr>`;
                 }).join('');
 
-                accountHtml += `
+                tempAccountHtml += `
               <div class="overflow-x-auto bg-white rounded-lg shadow-sm">
                 <table class="min-w-full text-sm table-fixed">
                   <thead class="bg-gray-100">
@@ -1118,11 +1286,15 @@
                   </thead>
                   <tbody>${tableRows}</tbody>
                 </table>
-              </div>`;
-                accountHtml += `</div>`;
+              </div></div>`;
               }
-              accountHtml += `</div>`;
-              if (hasContentForAccount) html += accountHtml;
+
+              tempAccountHtml += `</div>`;
+
+              // レコードが1つでもあればHTMLに追加
+              if (hasRecordsInAccount) {
+                html += tempAccountHtml;
+              }
             }
             html += `</div></div>`;
           }
@@ -1210,7 +1382,6 @@
             return;
           }
 
-          console.log("Slack status update notify success");
         } catch (e) {
           console.error("Slack status update notify exception", e);
           showMessage("Slackへのステータス更新通知でエラーが発生しました。", "error");
@@ -1311,9 +1482,7 @@
           }
 
           // 「決定」の時だけ撮影連絡DBへ追加（外部キャストのみ）
-          console.log(`DEBUG: changeCastingStatus calling. Status=${newStatus}, ID=${castingId}, isInternal=${rec.isInternal}`);
           if (rec.isInternal) {
-            console.log("Internal cast, skipping Shooting Contact DB addition.");
           }
           if ((newStatus === "決定" || newStatus === "OK") && !rec.isInternal) {
             const updaterEmail = currentUser?.email || '';
@@ -1321,7 +1490,6 @@
             // 香盤DBからデータを検索
             const scheduleKey = `${rec.castId}_${rec.startDate}`;
             const scheduleInfo = shootingScheduleData.get(scheduleKey) || {};
-            console.log(`DEBUG: Found schedule info for ${scheduleKey}:`, scheduleInfo);
 
             try {
               const addRes = await fetch("/api/shooting_contact/add", {
@@ -1346,7 +1514,6 @@
               if (!addRes.ok) {
                 console.error("Failed to add to shooting contact DB", await addRes.text());
               } else {
-                console.log("Successfully added to shooting contact DB");
               }
             } catch (err) {
               console.error("Exception calling shooting_contact/add", err);
@@ -1465,6 +1632,9 @@
           showMessage('追加オーダーの元となる代表レコードが見つかりません。', 'error');
           return;
         }
+
+        // ★追加: 前回のファイルが残っている可能性があるのでクリア
+        if (cartMeta && cartMeta.pdfFiles) delete cartMeta.pdfFiles;
 
         isAdditionalOrderMode = true;
         additionalOrderContext = {
@@ -2062,16 +2232,26 @@ ${rec.note || "なし"}
       function renderAgencyFilter() {
         const dd = document.getElementById('agency-filter-dropdown'); if (!dd) return;
         const agencies = [...new Set(castData.map(c => c.agency?.trim() || 'フリー'))].sort((a, b) => a.localeCompare(b, 'ja'));
-        dd.innerHTML = `
-      <div class="p-2 hover:bg-gray-100 cursor-pointer text-sm" onclick="selectAgency('')">すべて</div>
-      ${agencies.map(a => `<div class="p-2 hover:bg-gray-100 cursor-pointer text-sm" onclick="selectAgency('${a}')">${a}</div>`).join('')}
-    `;
+
+        dd.innerHTML = agencies.map(a => `
+          <label class="flex items-center px-3 py-2 hover:bg-gray-100 cursor-pointer">
+            <input type="checkbox" value="${a}" class="h-4 w-4 text-blue-600 border-gray-300 rounded mr-2" onchange="updateAgencyButton(); displayAvailableCasts();">
+            <span class="text-sm text-gray-700">${a}</span>
+          </label>
+        `).join('');
       }
-      function selectAgency(name) {
+
+      function updateAgencyButton() {
         const btn = document.getElementById('agency-filter-btn');
-        if (btn) btn.firstElementChild.textContent = name || '選択...';
-        document.getElementById('agency-filter-dropdown')?.classList.add('hidden');
-        displayAvailableCasts();
+        if (!btn) return;
+        const checked = document.querySelectorAll('#agency-filter-dropdown input[type="checkbox"]:checked');
+        if (checked.length === 0) {
+          btn.firstElementChild.textContent = '選択...';
+        } else if (checked.length === 1) {
+          btn.firstElementChild.textContent = checked[0].value;
+        } else {
+          btn.firstElementChild.textContent = `選択中 (${checked.length})`;
+        }
       }
 
       // ========= Shooting List (Area 2) =========
@@ -2152,10 +2332,73 @@ ${rec.note || "なし"}
         // "一旦ここまでできたら、カートの変更を伝えます。"
         // So for now, I just need to store it in `selectedShooting`.
         // I will log it for debug.
-        console.log("Selected Shooting:", selectedShooting);
       }
 
       // ========= Cart =========
+      async function submitNewOrder() {
+        // 1. Auth Check (Auto-Login)
+        const isAuth = await ensureAuth();
+        if (!isAuth) {
+          alert("ログアウト状態のため送信できません。再ログインしてください。");
+          handleAuthClick();
+          return;
+        }
+
+        if (Object.keys(cart).length === 0) {
+          showMessage('カートが空です。', 'info');
+          return;
+        }
+
+        // Show Custom Confirmation Modal instead of native confirm
+        const modal = document.getElementById('special-confirmation-modal');
+        if (modal) {
+          modal.classList.remove('hidden');
+
+          // Reset checkboxes
+          document.getElementById('confirm-intimacy').checked = false;
+          document.getElementById('confirm-child').checked = false;
+
+          // Setup one-time event listener for OK button
+          const okBtn = document.getElementById('special-confirm-ok');
+          // Clone button to remove old listeners
+          const newOkBtn = okBtn.cloneNode(true);
+          okBtn.parentNode.replaceChild(newOkBtn, okBtn);
+
+          newOkBtn.addEventListener('click', async () => {
+            modal.classList.add('hidden');
+
+            // Handle Intimacy Check
+            const isIntimacy = document.getElementById('confirm-intimacy').checked;
+            if (isIntimacy) {
+              // Append to note for all items in cart
+              for (const key in cart) {
+                if (cart[key].note) {
+                  cart[key].note += "\n【インティマシーシーンあり】";
+                } else {
+                  cart[key].note = "【インティマシーシーンあり】";
+                }
+              }
+            }
+
+            // Call submission
+            await confirmProvisionalBookings();
+          });
+        } else {
+          // Fallback if modal missing
+          if (!confirm('この内容でオーダーを送信しますか？')) return;
+          await confirmProvisionalBookings();
+        }
+      }
+
+
+
+      // Make handleAddToCart global
+      window.handleAddToCart = function (castId) {
+        addToCart(castId);
+        const modal = document.getElementById('cast-detail-modal');
+        if (modal) modal.remove();
+      };
+
       function addToCart(castId) {
         if (!castId) return;
         if (selectedDates.length === 0) {
@@ -2210,6 +2453,14 @@ ${rec.note || "なし"}
       async function confirmProvisionalBookings(confirmationData) {
         const items = Object.values(cart); if (items.length === 0) { showMessage('カートが空です。', 'info'); return; }
 
+        // ★追加: 確認モーダルで待機している間にセッションが切れている可能性があるため再チェック
+        const isAuth = await ensureAuth();
+        if (!isAuth) {
+          alert("認証セッションが切れました。再ログインしてください。");
+          handleAuthClick();
+          return;
+        }
+
         const accountName = cartMeta.account || '';
         const notionUrl = cartMeta.notionUrl || '';
         const projectNames = cartMeta.projectNames || [];
@@ -2224,6 +2475,29 @@ ${rec.note || "なし"}
         const internalEvents = [];
 
         try {
+          // 【重要】送信直前に最新データを強制取得（排他制御のため）
+          await fetchCastingDataFromSheet();
+
+          // コンフリクトチェック
+          const errors = [];
+          for (const it of items) {
+            const workTitle = it.projectName || projectNames[0];
+            const duplicate = castingData.find(c =>
+              c.projectName === workTitle &&
+              c.castId === it.cast.castId &&
+              !['キャンセル', 'NG'].includes(c.status)
+            );
+            if (duplicate) {
+              errors.push(`・${it.cast.name} は、作品「${workTitle}」で既に登録されています（ステータス: ${duplicate.status} / 担当: ${duplicate.updatedBy || '不明'}）`);
+            }
+          }
+
+          if (errors.length > 0) {
+            showLoader(false);
+            alert("【エラー：重複オーダー】\n以下のキャストは、タッチの差で既に同作品に登録されました。\n\n" + errors.join("\n"));
+            return;
+          }
+
           const values = []; const nowISO = new Date().toISOString();
           const castingIdPrefix = `pc_${Date.now()}`; let seq = 1;
           const ordersForSlack = [];
@@ -2257,6 +2531,45 @@ ${rec.note || "なし"}
               : 'オーダー待ち';
 
             // Slack 通知用の注文情報
+            // ★追加: 競合チェック (Conflict Check)
+            // ★★★ 修正箇所: 競合チェックロジックの強化 ★★★
+            let conflictMsg = null;
+
+            // it.dates は ['2025-01-01', '2025-01-02'...] の形式
+            for (const d of it.dates) {
+              // 比較対象の日付 Epoch
+              const targetEpoch = toEpochDay(d);
+
+              const conflict = castingData.find(c => {
+                // 自分自身のカート内の重複は除外（同じプロジェクトへの追加などはOKとする場合）
+                if (c.projectName === workTitle) return false;
+
+                // キャンセルやNGは競合とみなさない
+                if (['キャンセル', 'NG', 'キャスティング完了'].includes(c.status)) return false;
+
+                // キャストID一致
+                if (c.castId !== it.cast.castId) return false;
+
+                // 日付重複チェック (Epoch変換して比較)
+                // c.startDate / c.endDate は "YYYY-MM-DD"
+                const startEpoch = toEpochDay(c.startDate);
+                const endEpoch = toEpochDay(c.endDate);
+
+                if (startEpoch === null || endEpoch === null || targetEpoch === null) return false;
+
+                // 範囲が重なるか check
+                return (targetEpoch >= startEpoch && targetEpoch <= endEpoch);
+              });
+
+              if (conflict) {
+                const holder = conflict.accountName || '他チーム';
+                conflictMsg = `※先に【${holder}】がキャスティングしています（${conflict.status}）。`;
+                console.log("Conflict found:", conflictMsg, conflict); // デバッグ用ログ
+                break;
+              }
+            }
+            // ★★★ 修正ここまで ★★★
+
             ordersForSlack.push({
               castingId: `${castingIdPrefix}_${seq}`,
               roleName: it.roleName || '',
@@ -2266,6 +2579,7 @@ ${rec.note || "なし"}
               note: it.note || '',
               projectName: workTitle,
               slack_user_id: slackMentionId || null,
+              conflictInfo: conflictMsg // ★追加
             });
 
             for (const rg of ranges) {
@@ -2374,8 +2688,10 @@ ${rec.note || "なし"}
                 // Use FormData to send file and payload
                 const formData = new FormData();
                 formData.append('payload_str', JSON.stringify(payload));
-                if (cartMeta.pdfFile) {
-                  formData.append('file', cartMeta.pdfFile);
+                if (cartMeta.pdfFiles && cartMeta.pdfFiles.length > 0) {
+                  for (let i = 0; i < cartMeta.pdfFiles.length; i++) {
+                    formData.append('files', cartMeta.pdfFiles[i]);
+                  }
                 }
 
                 try {
@@ -2620,16 +2936,18 @@ ${roleName}：${item.cast.name}`;
       <div class="p-4">
         <h2 class="text-2xl font-bold mb-6 text-gray-800">撮影連絡管理</h2>
         
-        <!-- Tabs -->
-        <div class="flex space-x-1 border-b mb-6">
-            <button class="contact-tab px-4 py-2 font-medium text-sm rounded-t-lg border-b-2 transition-colors ${currentContactTab === '香盤連絡待ち' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'}" data-tab="香盤連絡待ち">
+        <div class="flex space-x-1 border-b mb-6 overflow-x-auto">
+            <button class="contact-tab px-4 py-2 font-medium text-sm rounded-t-lg border-b-2 transition-colors whitespace-nowrap ${currentContactTab === '香盤連絡待ち' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'}" data-tab="香盤連絡待ち">
                 1. 香盤連絡待ち
             </button>
-            <button class="contact-tab px-4 py-2 font-medium text-sm rounded-t-lg border-b-2 transition-colors ${currentContactTab === 'メイキング共有待ち' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'}" data-tab="メイキング共有待ち">
-                2. メイキング共有待ち
+            <button class="contact-tab px-4 py-2 font-medium text-sm rounded-t-lg border-b-2 transition-colors whitespace-nowrap ${currentContactTab === '発注書送信待ち' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'}" data-tab="発注書送信待ち">
+                2. 発注書送信待ち
             </button>
-            <button class="contact-tab px-4 py-2 font-medium text-sm rounded-t-lg border-b-2 transition-colors ${currentContactTab === '投稿日連絡待ち' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'}" data-tab="投稿日連絡待ち">
-                3. 投稿日連絡待ち
+            <button class="contact-tab px-4 py-2 font-medium text-sm rounded-t-lg border-b-2 transition-colors whitespace-nowrap ${currentContactTab === 'メイキング共有待ち' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'}" data-tab="メイキング共有待ち">
+                3. メイキング共有待ち
+            </button>
+            <button class="contact-tab px-4 py-2 font-medium text-sm rounded-t-lg border-b-2 transition-colors whitespace-nowrap ${currentContactTab === '投稿日連絡待ち' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'}" data-tab="投稿日連絡待ち">
+                4. 投稿日連絡待ち
             </button>
         </div>
 
@@ -2637,17 +2955,11 @@ ${roleName}：${item.cast.name}`;
         <div id="shoot-contact-container" class="overflow-x-auto"></div>
       </div>
     `;
-
-        // Tab Event Listeners
+        // Event Listeners
         view.querySelectorAll('.contact-tab').forEach(btn => {
-          btn.addEventListener('click', async (e) => {
-            currentContactTab = e.target.dataset.tab;
-            // Update Tab Styles
-            view.querySelectorAll('.contact-tab').forEach(b => {
-              const isActive = b.dataset.tab === currentContactTab;
-              b.className = `contact-tab px-4 py-2 font-medium text-sm rounded-t-lg border-b-2 transition-colors ${isActive ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`;
-            });
-            await loadShootingContactPage();
+          btn.addEventListener('click', () => {
+            currentContactTab = btn.dataset.tab;
+            showShootContactPage();
           });
         });
 
@@ -2812,25 +3124,31 @@ ${roleName}：${item.cast.name}`;
 
         if (currentContactTab === '香盤連絡待ち') {
           extraHeader = '<th class="px-2 py-2 text-left w-64">時間/場所</th>';
-          costHeader = '<th class="px-2 py-2 text-left w-24">金額</th>'; // P列相当
+          costHeader = '<th class="px-2 py-2 text-left w-24">金額</th>';
+        } else if (currentContactTab === '発注書送信待ち') {
+          // ★追加: 発注書送信待ち用のヘッダー（香盤連絡待ちと同様に見せる）
+          extraHeader = '<th class="px-2 py-2 text-left w-64">時間/場所</th>';
+          costHeader = '<th class="px-2 py-2 text-left w-24">金額</th>';
         } else if (currentContactTab === 'メイキング共有待ち') {
-          extraHeader = '<th class="px-2 py-2 text-left">メイキングURL</th>';
+          extraHeader = '<th class="px-2 py-2 text-left w-24">メイキングURL</th>';
         } else if (currentContactTab === '投稿日連絡待ち') {
-          extraHeader = '<th class="px-2 py-2 text-left">投稿日</th>';
+          extraHeader = '<th class="px-2 py-2 text-left w-24">投稿日</th>';
         }
 
         let html = `
-        <table class="min-w-full text-sm">
-            <thead class="bg-gray-50 text-gray-700">
-                <tr>
-                    <th class="px-2 py-2 text-left">キャスト</th>
-                    <th class="px-2 py-2 text-left">役名</th>
-                    ${extraHeader}
-                    ${costHeader}
-                    <th class="px-2 py-2 text-center w-32">アクション</th>
-                </tr>
-            </thead>
-            <tbody class="divide-y divide-gray-100">
+        <table class="min-w-full bg-white border rounded-lg overflow-hidden table-fixed">
+          <thead class="bg-gray-100 text-xs text-gray-500 uppercase">
+            <tr>
+              <th class="px-2 py-2 text-left w-48">案件名 / 役名</th>
+              <th class="px-2 py-2 text-left w-24">キャスト</th>
+              <th class="px-2 py-2 text-left w-12">M/S</th>
+              <th class="px-2 py-2 text-left w-24">日時/場所</th>
+              ${costHeader ? '<th class="px-2 py-2 text-left w-12">金額</th>' : ''}
+              ${!costHeader && extraHeader ? extraHeader : ''}
+              <th class="px-2 py-2 text-center w-20">アクション</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-200">
       `;
 
         items.forEach(item => {
@@ -2840,7 +3158,7 @@ ${roleName}：${item.cast.name}`;
 
           // メール作成ボタン（共通）
           const mailBtn = `
-            <button class="px-2 py-1 bg-blue-600 text-white rounded text-xs hover:bg-blue-700 shadow-sm whitespace-nowrap"
+            <button class="px-2 py-1 bg-blue-600 text-white rounded text-xs hover:bg-blue-700 shadow-sm whitespace-nowrap w-full"
                 onclick="openShootMailModal('${item.castingId}')">
                 ✉️ 作成
             </button>`;
@@ -2852,12 +3170,12 @@ ${roleName}：${item.cast.name}`;
               <div class="flex flex-col gap-1">
                 <div class="flex items-center gap-1">
                    <span class="text-xs text-gray-400 w-6">IN</span>
-                   <input type="text" class="shoot-in border rounded px-1 py-0.5 text-xs w-20 bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
+                   <input type="text" class="shoot-in border rounded px-1 py-0.5 text-xs w-full bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
                           value="${item.inTime || ''}" placeholder="00:00">
                 </div>
                 <div class="flex items-center gap-1">
                    <span class="text-xs text-gray-400 w-6">OUT</span>
-                   <input type="text" class="shoot-out border rounded px-1 py-0.5 text-xs w-20 bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
+                   <input type="text" class="shoot-out border rounded px-1 py-0.5 text-xs w-full bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
                           value="${item.outTime || ''}" placeholder="00:00">
                 </div>
                 <input type="text" class="shoot-location border rounded px-1 py-0.5 text-xs w-full mt-1 bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
@@ -2868,7 +3186,7 @@ ${roleName}：${item.cast.name}`;
             // 金額入力欄 (P列)
             costCol = `
             <td class="px-2 py-2 align-top">
-              <input type="text" class="shoot-cost border rounded px-1 py-0.5 text-xs w-20 text-right bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
+              <input type="text" class="shoot-cost border rounded px-1 py-0.5 text-xs w-full text-right bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
                      value="${item.cost || ''}" placeholder="¥">
             </td>`;
 
@@ -2882,26 +3200,75 @@ ${roleName}：${item.cast.name}`;
                 ${mailBtn}
             </div>`;
 
+          } else if (currentContactTab === '発注書送信待ち') {
+            // ★追加: 発注書送信待ちのロジック
+            // 香盤連絡待ちと同様に編集可能にする
+            extraCol = `
+            <td class="px-2 py-2 align-top">
+              <div class="flex flex-col gap-1">
+                <div class="flex items-center gap-1">
+                   <span class="text-xs text-gray-400 w-6">IN</span>
+                   <input type="text" class="shoot-in border rounded px-1 py-0.5 text-xs w-full bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
+                          value="${item.inTime || ''}" placeholder="00:00">
+                </div>
+                <div class="flex items-center gap-1">
+                   <span class="text-xs text-gray-400 w-6">OUT</span>
+                   <input type="text" class="shoot-out border rounded px-1 py-0.5 text-xs w-full bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
+                          value="${item.outTime || ''}" placeholder="00:00">
+                </div>
+                <input type="text" class="shoot-location border rounded px-1 py-0.5 text-xs w-full mt-1 bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
+                       value="${item.location || ''}" placeholder="場所">
+              </div>
+            </td>`;
+
+            costCol = `
+            <td class="px-2 py-2 align-top">
+              <input type="text" class="shoot-cost border rounded px-1 py-0.5 text-xs w-full text-right bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
+                     value="${item.cost || ''}" placeholder="¥">
+            </td>`;
+
+            // アクションボタン: 保存、発注書作成、メール
+            actionBtns = `
+            <div class="flex flex-col gap-2 items-center">
+                <button class="px-2 py-1 bg-emerald-600 text-white rounded text-xs hover:bg-emerald-700 shadow-sm whitespace-nowrap w-full"
+                    onclick="saveShootingRow('${item.castingId}', this)">
+                    💾 保存
+                </button>
+                <button class="px-2 py-1 bg-indigo-600 text-white rounded text-xs hover:bg-indigo-700 shadow-sm whitespace-nowrap w-full"
+                    onclick="openOrderDocModal('${item.castingId}')">
+                    📄 発注書
+                </button>
+                ${mailBtn}
+            </div>`;
+
           } else if (currentContactTab === 'メイキング共有待ち') {
             extraCol = `<td class="px-2 py-2 text-xs text-blue-600 truncate max-w-xs"><a href="${item.makingUrl}" target="_blank">${item.makingUrl || '-'}</a></td>`;
+            costCol = `<td class="px-2 py-2 text-xs text-right">${item.cost || '-'}</td>`;
             actionBtns = mailBtn;
           } else if (currentContactTab === '投稿日連絡待ち') {
             extraCol = `<td class="px-2 py-2 text-xs">${item.postDate || '-'}</td>`;
+            costCol = `<td class="px-2 py-2 text-xs text-right">${item.cost || '-'}</td>`;
             actionBtns = mailBtn;
           }
 
           html += `
-            <tr class="hover:bg-gray-50" data-casting-id="${item.castingId}">
-                <td class="px-2 py-2 font-medium align-top">
-                    <div>${item.castName}</div>
-                    <div class="text-xs text-gray-400">(${item.castType})</div>
-                </td>
-                <td class="px-2 py-2 text-gray-600 align-top">${item.roleName}</td>
-                ${extraCol}
-                ${costCol}
-                <td class="px-2 py-2 text-center align-top">
-                     ${actionBtns}
-                </td>
+            <tr class="hover:bg-gray-50">
+              <td class="px-2 py-2 align-top">
+                <div class="text-sm font-bold text-gray-900">${item.projectName}</div>
+                <div class="text-xs text-gray-500">${item.roleName}</div>
+              </td>
+              <td class="px-2 py-2 align-top">
+                <div class="text-sm text-gray-900">${item.castName}</div>
+              </td>
+              <td class="px-2 py-2 align-top">
+                <div class="text-xs text-gray-500">${item.mainSub || '-'}</div>
+              </td>
+              ${extraCol ? extraCol : `<td class="px-2 py-2 align-top text-sm text-gray-500">${item.date}</td>`}
+              ${costCol ? costCol : (costHeader ? `<td class="px-2 py-2 align-top text-sm text-gray-500">${item.cost || ''}</td>` : '')}
+              ${!costHeader && extraHeader ? `<td class="px-2 py-2 align-top text-sm text-gray-500">${item.makingUrl || item.postDate || ''}</td>` : ''}
+              <td class="px-2 py-2 align-top text-center">
+                ${actionBtns}
+              </td>
             </tr>
           `;
         });
@@ -3046,65 +3413,340 @@ ${roleName}：${item.cast.name}`;
         }
         const displayUrl = formatDriveUrl(cast.imageUrl);
 
+        // Purchase Order Button Condition
+        const relevantCasting = castingData.find(c => c.castId === castId && overlaps(selectedDates[0], selectedDates[selectedDates.length - 1], c.startDate, c.endDate));
+        const canDownloadOrder = relevantCasting && ['OK', '香盤連絡待ち', '決定'].includes(relevantCasting.status);
+
         detailModal.innerHTML = `
           <div class="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto relative flex flex-col md:flex-row">
-            <button id="close-detail-modal" class="absolute top-4 right-4 text-gray-500 hover:text-gray-700 z-10">
-              <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-            </button>
-            
-            <div class="w-full md:w-1/2 bg-gray-100 flex items-center justify-center p-4">
-               ${displayUrl ? `<img src="${displayUrl}" alt="${cast.name}" class="max-w-full max-h-[70vh] object-contain rounded shadow-sm" referrerpolicy="no-referrer">`
-            : `<div class="w-full h-64 flex items-center justify-center text-gray-400"><svg class="w-20 h-20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg></div>`}
-            </div>
-            
-            <div class="w-full md:w-1/2 p-8 flex flex-col">
-              <h2 class="text-3xl font-bold mb-2">${cast.name}</h2>
-              <p class="text-lg text-gray-600 mb-4">${cast.agency || 'フリー'}</p>
-              
-              <div class="flex space-x-4 mb-6">
-                ${snsLinks.join('')}
-              </div>
+             <button onclick="document.getElementById('cast-detail-modal').remove()" class="absolute top-4 right-4 text-gray-500 hover:text-gray-700 z-10">
+               <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+             </button>
+             
+             <!-- Left: Image -->
+             <div class="w-full md:w-1/2 bg-gray-100 flex items-center justify-center p-4">
+               ${cast.imageUrl ? `<img src="${formatDriveUrl(cast.imageUrl)}" class="max-w-full max-h-[70vh] object-contain rounded shadow-sm" referrerpolicy="no-referrer">`
+            : `<div class="text-gray-400">No Image</div>`}
+             </div>
 
-              <div class="space-y-3 text-sm text-gray-700 mb-8">
-                <div class="flex border-b pb-2"><span class="w-24 font-bold text-gray-500">年齢</span><span>${Number.isFinite(cast.age) ? cast.age + '歳' : '-'}</span></div>
-                <div class="flex border-b pb-2"><span class="w-24 font-bold text-gray-500">性別</span><span>${cast.gender || '-'}</span></div>
-                <div class="flex border-b pb-2"><span class="w-24 font-bold text-gray-500">連絡先</span><span>${cast.email || '-'}</span></div>
-                <div class="flex border-b pb-2"><span class="w-24 font-bold text-gray-500">備考</span><span>${cast.notes || '-'}</span></div>
-              </div>
+             <!-- Right: Info -->
+             <div class="w-full md:w-1/2 p-8 flex flex-col">
+               <h2 class="text-3xl font-bold mb-2">${cast.name}</h2>
+               <p class="text-lg text-gray-600 mb-4">${cast.agency || 'フリー'}</p>
+               
+               <div class="flex space-x-4 mb-6">
+                 ${snsLinks.join('')}
+               </div>
 
-              <div class="mt-auto">
-                <button id="detail-add-cart" class="w-full ${btnClass} text-white font-bold py-3 px-4 rounded-lg shadow transition" ${disabled ? 'disabled' : ''}>
-                  ${btnText}
-                </button>
-              </div>
-            </div>
+               <div class="space-y-3 text-sm text-gray-700 mb-8">
+                 <div class="flex border-b pb-2">
+                   <span class="w-24 font-bold text-gray-500">年齢</span>
+                   <span>${cast.age ? cast.age + '歳' : '-'}</span>
+                 </div>
+                 <div class="flex border-b pb-2">
+                   <span class="w-24 font-bold text-gray-500">性別</span>
+                   <span>${cast.gender || '-'}</span>
+                 </div>
+                 <div class="flex border-b pb-2">
+                   <span class="w-24 font-bold text-gray-500">連絡先</span>
+                   <span class="break-all">${cast.email || '-'}</span>
+                 </div>
+                 <div class="flex border-b pb-2">
+                   <span class="w-24 font-bold text-gray-500">備考</span>
+                   <span class="whitespace-pre-wrap">${cast.notes || '-'}</span>
+                 </div>
+               </div>
+
+               <div class="mt-auto">
+                 <button onclick="handleAddToCart('${cast.castId}')" 
+                   class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg shadow transition ${disabled ? 'opacity-50 cursor-not-allowed' : ''}" ${disabled ? 'disabled' : ''}>
+                   ${btnText}
+                 </button>
+               </div>
+             </div>
           </div>
         `;
 
         detailModal.classList.remove('hidden');
 
         // Event Listeners
-        detailModal.querySelector('#close-detail-modal').addEventListener('click', () => {
-          detailModal.classList.add('hidden');
-        });
         detailModal.addEventListener('click', (e) => {
           if (e.target === detailModal) detailModal.classList.add('hidden');
         });
+      }
 
-        if (!disabled) {
-          detailModal.querySelector('#detail-add-cart').addEventListener('click', () => {
-            addToCart(cast.castId);
-            detailModal.classList.add('hidden');
-            displayAvailableCasts(); // Refresh list to show "Added"
-          });
+      // ========== PDF生成ロジック (Google Docs廃止版) ==========
+
+      // 日本語フォントを読み込むためのヘルパー
+      async function loadJapaneseFont(doc) {
+        // 今回はhtml2canvas方式のため、この関数は実質未使用ですが、将来のために残します
+      }
+
+      // ========== 発注書作成モーダル & PDF生成 ==========
+
+      // 1. モーダルを開く関数
+      window.openOrderDocModal = function (castingId) {
+        // データ取得
+        let targetCasting = null;
+        if (window.shootingContactData) {
+          targetCasting = window.shootingContactData.find(item => item.castingId === castingId);
         }
+        if (!targetCasting) {
+          targetCasting = castingData.find(c => c.castingId === castingId);
+        }
+        if (!targetCasting) {
+          showMessage('対象データが見つかりません', 'error');
+          return;
+        }
+
+        // 初期値セット
+        const data = {
+          date: new Date().toLocaleDateString(),
+          castName: targetCasting.castName || targetCasting.name || '',
+          project: targetCasting.projectName || '',
+          role: targetCasting.roleName || '',
+          shootDate: targetCasting.date || targetCasting.startDate || targetCasting.shootDate || '',
+          cost: targetCasting.cost || '',
+          note: targetCasting.note || ''
+        };
+
+        const modal = document.getElementById('edit-modal'); // 既存の汎用モーダルを流用
+        if (!modal) return;
+
+        modal.innerHTML = `
+          <div class="bg-white rounded-lg shadow-xl max-w-lg w-full p-6">
+            <div class="flex justify-between items-center mb-4">
+              <h3 class="text-xl font-bold">発注書作成（編集）</h3>
+              <button onclick="document.getElementById('edit-modal').classList.add('hidden')" class="text-gray-500 hover:text-gray-700">&times;</button>
+            </div>
+            
+            <div class="space-y-3 text-sm">
+              <p class="text-xs text-gray-500">PDFに記載する内容を編集できます。</p>
+              
+              <div>
+                <label class="block font-bold text-gray-700">日付</label>
+                <input type="text" id="pdf-date" class="w-full border rounded p-2" value="${data.date}">
+              </div>
+              <div>
+                <label class="block font-bold text-gray-700">宛名（キャスト様）</label>
+                <input type="text" id="pdf-castname" class="w-full border rounded p-2" value="${data.castName}">
+              </div>
+              <div>
+                <label class="block font-bold text-gray-700">案件名</label>
+                <input type="text" id="pdf-project" class="w-full border rounded p-2" value="${data.project}">
+              </div>
+              <div>
+                <label class="block font-bold text-gray-700">役名</label>
+                <input type="text" id="pdf-role" class="w-full border rounded p-2" value="${data.role}">
+              </div>
+              <div>
+                <label class="block font-bold text-gray-700">撮影日</label>
+                <input type="text" id="pdf-shootdate" class="w-full border rounded p-2" value="${data.shootDate}">
+              </div>
+              <div>
+                <label class="block font-bold text-gray-700">金額</label>
+                <input type="text" id="pdf-cost" class="w-full border rounded p-2" value="${data.cost}" placeholder="数値のみ入力すると自動フォーマットされます">
+              </div>
+              <div>
+                <label class="block font-bold text-gray-700">備考</label>
+                <textarea id="pdf-note" class="w-full border rounded p-2" rows="3">${data.note}</textarea>
+              </div>
+            </div>
+
+            <div class="mt-6 flex justify-end gap-3">
+              <button onclick="document.getElementById('edit-modal').classList.add('hidden')" class="px-4 py-2 border rounded hover:bg-gray-50">キャンセル</button>
+              <button id="btn-generate-pdf" class="px-6 py-2 bg-indigo-600 text-white font-bold rounded hover:bg-indigo-700">
+                PDFを作成
+              </button>
+            </div>
+          </div>
+        `;
+
+        modal.classList.remove('hidden');
+
+        // 生成ボタンイベント
+        document.getElementById('btn-generate-pdf').addEventListener('click', async () => {
+          // UUID生成 (既存があればそれを使う、なければ新規生成)
+          const uuid = targetCasting.poUuid || crypto.randomUUID();
+
+          // Save UUID to Backend
+          try {
+            await fetch('/api/shooting_contact/update', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                castingId: castingId,
+                poUuid: uuid
+              })
+            });
+            // Update local data
+            targetCasting.poUuid = uuid;
+          } catch (e) {
+            console.error("Failed to save PO UUID", e);
+            // Continue anyway? Or stop? User said "save to sheet".
+            // We should probably alert but continue or stop.
+            // For now, log and continue.
+          }
+
+          const finalData = {
+            date: document.getElementById('pdf-date').value,
+            castName: document.getElementById('pdf-castname').value,
+            project: document.getElementById('pdf-project').value,
+            role: document.getElementById('pdf-role').value,
+            shootDate: document.getElementById('pdf-shootdate').value,
+            cost: document.getElementById('pdf-cost').value,
+            note: document.getElementById('pdf-note').value,
+            uuid: uuid
+          };
+          generatePDFFromData(finalData);
+          modal.classList.add('hidden');
+        });
+      };
+
+
+
+      // 季節の挨拶を取得する関数
+      function getSeasonalGreeting() {
+        const month = new Date().getMonth() + 1;
+        const greetings = {
+          1: "初春", 2: "晩冬", 3: "早春", 4: "陽春", 5: "新緑", 6: "初夏",
+          7: "盛夏", 8: "晩夏", 9: "初秋", 10: "秋冷", 11: "晩秋", 12: "初冬"
+        };
+        return greetings[month] || "時下";
+      }
+
+      // 2. 実際のPDF生成処理（データを引数で受け取るように変更）
+      window.generatePDFFromData = async function (data) {
+        // 金額フォーマット
+        let costStr = data.cost;
+        const numCost = Number(data.cost.replace(/[^0-9]/g, ''));
+        if (numCost > 0 && !data.cost.includes('¥')) {
+          costStr = `¥${numCost.toLocaleString()}`;
+        }
+
+        const tempDiv = document.createElement('div');
+        tempDiv.style.width = '210mm';
+        tempDiv.style.minHeight = '297mm';
+        tempDiv.style.padding = '20mm';
+        tempDiv.style.backgroundColor = 'white';
+        tempDiv.style.color = 'black';
+        tempDiv.style.fontFamily = '"Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif';
+        tempDiv.style.position = 'fixed';
+        tempDiv.style.top = '-9999px';
+        tempDiv.style.left = '-9999px';
+        tempDiv.style.zIndex = '-100';
+        // ★修正: 線が入る問題を防ぐ
+        tempDiv.style.textDecoration = 'none';
+
+        const greeting = getSeasonalGreeting();
+
+        tempDiv.innerHTML = `
+          <div style="text-decoration: none !important; font-size: 14px; line-height: 1.6;">
+            <h1 style="text-align: center; font-size: 20px; font-weight: bold; margin-bottom: 30px;">GOKKO倶楽部出演発注書</h1>
+            
+            <div style="text-align: right; margin-bottom: 5px;">${data.date}</div>
+            <div style="text-align: right; margin-bottom: 20px; font-size: 10px; color: #666;">No. ${data.uuid || ''}</div>
+            
+            <div style="font-size: 14px; margin-bottom: 20px;">
+              <span style="font-size: 14px;">${data.castName} 様</span>
+            </div>
+
+            <p style="margin-bottom: 5px;">ご快諾いただきましたドラマ出演の件につきまして、下記の通り発注申し上げます。<br>
+            内容をご確認いただき、ご不明な点がございましたら担当までご連絡ください。</p>
+
+            <div style="margin-bottom: 20px; padding: 10px; width: 100%;">
+              <p style="font-weight: bold; margin-bottom: 5px;">【発注元】</p>
+              <p style="margin: 0;">〒135-0091</p>
+              <p style="margin: 0;">東京都港区台場2-3-1トレードピアお台場12F</p>
+              <p style="margin: 0;">株式会社GOKKO</p>
+              <p style="margin: 0;">担当：GOKKO倶楽部キャスティング担当</p>
+            </div>
+
+            <div style="margin-bottom: 20px;">
+              <p style="font-weight: bold; display: inline-block; margin-bottom: 10px;">【お取引条件】</p>
+              <p style="margin: 2px 0;">支払条件： 月末締め翌月末払い</p>
+              <p style="margin: 2px 0;">支払方法： ご指定の銀行口座へお振込み</p>
+              <p style="margin: 2px 0;">秘密保持： 本件に関わる脚本内容、撮影情報、共演者情報等は、公式解禁まで第三者への漏洩（SNS含む）を禁止とさせていただきます。</p>
+              <p style="text-align: right; margin: 0;">以上</p>
+            </div>
+
+            <div style="text-align: center; margin-bottom: 20px; font-weight: bold;">記</div>
+
+            <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+              <tr style="border: 1px solid #000;">
+                <th style="border: 1px solid #000; padding: 8px; background-color: #f0f0f0; width: 30%; text-align: center;">項目</th>
+                <th style="border: 1px solid #000; padding: 8px; background-color: #f0f0f0; text-align: center;">内容</th>
+              </tr>
+              <tr style="border: 1px solid #000;">
+                <td style="border: 1px solid #000; padding: 8px; text-align: center;">案件名</td>
+                <td style="border: 1px solid #000; padding: 8px;">${data.project}</td>
+              </tr>
+              <tr style="border: 1px solid #000;">
+                <td style="border: 1px solid #000; padding: 8px; text-align: center;">役名</td>
+                <td style="border: 1px solid #000; padding: 8px;">${data.role}</td>
+              </tr>
+              <tr style="border: 1px solid #000;">
+                <td style="border: 1px solid #000; padding: 8px; text-align: center;">撮影日</td>
+                <td style="border: 1px solid #000; padding: 8px;">${data.shootDate}</td>
+              </tr>
+              <tr style="border: 1px solid #000;">
+                <td style="border: 1px solid #000; padding: 8px; text-align: center;">出演料（金額）</td>
+                <td style="border: 1px solid #000; padding: 8px;">${costStr} （税別）</td>
+              </tr>
+            </table>
+
+          </div>
+        `;
+
+        document.body.appendChild(tempDiv);
+        showLoader(true);
+
+        try {
+          // html2canvas / jsPDF のロード確認
+          if (typeof html2canvas === 'undefined') await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
+          if (typeof window.jspdf === 'undefined') await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+
+          const canvas = await html2canvas(tempDiv, { scale: 2 });
+          const imgData = canvas.toDataURL('image/png');
+
+          const { jsPDF } = window.jspdf;
+          const pdf = new jsPDF('p', 'mm', 'a4');
+          const pdfWidth = pdf.internal.pageSize.getWidth();
+          const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+
+          pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+
+          const fileName = `${data.shootDate.replace(/[\/-]/g, '')}_${data.project}_${data.castName}_発注書.pdf`;
+          pdf.save(fileName);
+
+          showMessage('発注書PDFをダウンロードしました', 'success');
+        } catch (e) {
+          console.error(e);
+          showMessage('PDF作成に失敗しました: ' + e.message, 'error');
+        } finally {
+          document.body.removeChild(tempDiv);
+          showLoader(false);
+        }
+      };
+
+      // 旧関数を削除または上書き
+      window.createOrderDoc = window.openOrderDocModal;
+
+      // スクリプト読み込みヘルパー
+      function loadScript(src) {
+        return new Promise((resolve, reject) => {
+          const s = document.createElement('script');
+          s.src = src;
+          s.onload = resolve;
+          s.onerror = reject;
+          document.head.appendChild(s);
+        });
       }
 
       window.openShootMailModal = openShootMailModal;
       window.openShootStatusModal = openShootStatusModal;
 
       function openShootMailModal(castingId) {
-        console.log("openShootMailModal called for:", castingId); // Debug log
 
         // Try to find in shootingContactData first, then castingData
         let item = (window.shootingContactData || []).find(i => i.castingId === castingId);
@@ -3131,33 +3773,29 @@ ${roleName}：${item.cast.name}`;
 
         // Template Logic
         if (item.status === "香盤連絡待ち") {
-          subject = `【香盤連絡】${item.projectName} 撮影について`;
-          let costText = "";
-          if (item.cost) {
-            costText = `\n■金額\n¥${Number(item.cost).toLocaleString()}\n`;
-          }
-          body = `${item.castName} 様\n\nお世話になっております。\n株式会社GOKKOです。\n\n${item.projectName} の撮影詳細をお送りいたします。\n\n■日時\n${item.shootDate}\nIN: ${item.inTime || '未定'}\nOUT: ${item.outTime || '未定'}\n\n■場所\n${item.location || '未定'}\n${item.address || ''}\n${costText}\n■緊急連絡先\n${item.emergencyContact || ''}\n\n当日はよろしくお願いいたします。`;
+          subject = `【香盤連絡】${item.projectName}`;
+          body = `${item.castName} 様\n\nお世話になっております。\n株式会社GOKKOです。\n\n${item.projectName} の香盤をお送りいたします。\n\n日時：${item.date} ${item.inTime || '未定'}〜${item.outTime || '未定'}\n場所：${item.location || '未定'}\n\nご確認のほど、よろしくお願いいたします。`;
+        } else if (item.status === "発注書送信待ち") {
+          // ★追加: 発注書送付用のメールテンプレート
+          subject = `【発注書送付】${item.projectName}`;
+          body = `${item.castName} 様\n\nお世話になっております。\n株式会社GOKKOです。\n\n${item.projectName} の発注書をお送りいたします。\n添付ファイルをご確認のほど、よろしくお願いいたします。\n\n引き続きよろしくお願いいたします。`;
         } else if (item.status === "メイキング共有待ち") {
-          subject = `【オフショット共有】${item.projectName} 撮影の御礼`;
-          body = `${item.castName} 様\n\nお世話になっております。\n株式会社GOKKOです。\n\n先日は撮影お疲れ様でした！\n\n当日のオフショット・メイキング写真などがございましたら、\n下記URLまでご共有いただけますと幸いです。\n\n■共有URL\n${item.makingUrl || '(URL未設定)'}\n\n引き続きよろしくお願いいたします。`;
+          subject = `【メイキング共有】${item.projectName}`;
+          body = `${item.castName} 様\n\nお世話になっております。\n株式会社GOKKOです。\n\n${item.projectName} のメイキング映像が完成いたしました。\n以下のURLよりご確認いただけます。\n\n${item.makingUrl || '(URL)'}\n\nご確認のほど、よろしくお願いいたします。`;
         } else if (item.status === "投稿日連絡待ち") {
-          subject = `【公開のお知らせ】${item.projectName}`;
-          body = `${item.castName} 様\n\nお世話になっております。\n株式会社GOKKOです。\n\n出演いただいた作品が公開されました！\n\n■公開日\n${item.postDate || ''}\n\n■URL\n(URL)\n\nぜひSNS等で告知いただけますと幸いです。\nありがとうございました！`;
-        } else if (ORDER_WAIT_STATUSES.includes(item.status)) {
-          // ★ Order Wait -> Dashing (Offer) Template
-          subject = `【出演打診】${item.projectName}`;
-          let costText = "";
-          if (item.cost) {
-            costText = `\n■金額\n¥${Number(item.cost).toLocaleString()}\n`;
-          }
-          // Default Offer Body
-          body = `${item.castName} 様\n\nお世話になっております。\n株式会社GOKKOです。\n\n新規案件のご相談でご連絡いたしました。\n\n■案件名\n${item.projectName}\n\n■役名\n${item.roleName || ''}\n${costText}\n■撮影時期\n${item.shootDate || '未定'}\n\n■内容\n(詳細内容)\n\nご検討のほど、よろしくお願いいたします。`;
+          subject = `【投稿日連絡】${item.projectName}`;
+          body = `${item.castName} 様\n\nお世話になっております。\n株式会社GOKKOです。\n\n${item.projectName} の投稿日が決定いたしました。\n\n投稿日：${item.postDate || '(日付)'}\n\nご確認のほど、よろしくお願いいたします。`;
+        } else {
+          // Default
+          subject = `【連絡】${item.projectName}`;
+          body = `${item.castName} 様\n\nお世話になっております。\n株式会社GOKKOです。\n\n（本文）\n\nよろしくお願いいたします。`;
         }
 
         // Find email from castingData (Column U) - redundant if item is from castingData but safe
         const originalRec = castingData.find(c => c.castingId === castingId);
-        const castEmail = originalRec?.email || item.email || ""; // Fallback to item.email if available
-        console.log("Found email:", castEmail);
+        // ★修正: キャストDBからも検索してフォールバック
+        const castInfo = castData.find(c => c.castId === (originalRec?.castId || item.castId));
+        const castEmail = originalRec?.email || item.email || castInfo?.email || "";
 
         modal.innerHTML = `
         <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full p-6">
@@ -3212,6 +3850,8 @@ ${roleName}：${item.cast.name}`;
           if (isCastingItem && ORDER_WAIT_STATUSES.includes(currentStatus)) {
             nextStatus = "打診中";
           } else if (currentStatus === "香盤連絡待ち") {
+            nextStatus = "発注書送信待ち";
+          } else if (currentStatus === "発注書送信待ち") {
             nextStatus = "メイキング共有待ち";
           } else if (currentStatus === "メイキング共有待ち") {
             nextStatus = "投稿日連絡待ち";
@@ -3220,7 +3860,6 @@ ${roleName}：${item.cast.name}`;
           }
 
           if (nextStatus) {
-            console.log(`Auto-updating status: ${currentStatus} -> ${nextStatus}`);
             if (isCastingItem) {
               // Call Casting Status Update API
               await changeCastingStatus(castingId, nextStatus, "メール作成による自動更新");
@@ -3291,7 +3930,6 @@ ${roleName}：${item.cast.name}`;
           if (!res.ok) {
             throw new Error("Update failed");
           }
-          console.log("Updated fields:", fields);
           // Optional: Show toast
         } catch (e) {
           console.error(e);
@@ -3355,119 +3993,322 @@ ${roleName}：${item.cast.name}`;
         renderNewCartModal(modal);
       }
       window.submitNewOrder = async function () {
-        // Cleanup: Remove empty roles and projects
+        // 1. Auth Check
+        const isAuth = await ensureAuth();
+        if (!isAuth) {
+          // サイレント更新に失敗した場合は、明示的にログインボタンを押してもらう
+          alert("セッションの有効期限が切れました。\nログイン画面を表示しますので、再ログインしてください。");
+          handleAuthClick(); // ユーザーのアクション（ボタンクリック）の流れで呼べばポップアップはブロックされません
+          return;
+        }
+
+        // ■■■ 追加: 画面更新前にファイルを退避 ■■■
+        const fileInput = document.getElementById('order-pdf-file');
+        if (fileInput && fileInput.files.length > 0) {
+          cartMeta.pdfFiles = fileInput.files;
+          console.log("Files saved to memory:", cartMeta.pdfFiles.length);
+        }
+        // ■■■ 追加ここまで ■■■
+
+        // Cleanup: 役名などが空の無効なデータを掃除
         cartProjects = cartProjects.map(p => {
           const validRoles = p.roles.filter(r => r.name.trim() && r.castIds.length > 0);
           return { ...p, roles: validRoles };
-        }).filter(p => p.roles.length > 0); // Keep projects only if they have valid roles? 
-        // User said: "作品を追加した場合、デフォルトで2作品分...自動的に削除するように"
-        // If a project has title but no roles, should it be removed?
-        // "役名が入力されていない場合やキャストが入っていない場合は...自動的に削除"
-        // If a project has no valid roles, it effectively has no content to order.
-        // So removing projects with 0 valid roles seems correct.
+        }).filter(p => p.roles.length > 0);
 
-        renderCartModal(); // Re-render to show cleaned state (optional, but good for feedback)
+        // カート画面を再描画（掃除後の状態にするため）
+        renderCartModal();
 
         if (cartProjects.length === 0) {
           showMessage('有効なオーダー（役名とキャストが入力されたもの）がありません。', 'error');
           return;
         }
 
-        // Validate (Remaining validation for Title)
+        // Validate
         for (const p of cartProjects) {
           if (!p.title.trim()) {
             showMessage('作品名が入力されていないものがあります。', 'error');
             return;
           }
-          // Roles are already filtered to have name and casts, so no need to check them again
         }
 
-        // Prepare Data
-        const accountName = selectedShooting ? selectedShooting.team : (currentUser?.name || '不明');
+        // ★ここで確認モーダルを開く
+        renderConfirmationModal();
+      }
+
+      function renderConfirmationModal() {
+        const modal = document.getElementById('confirmation-modal');
+        if (!modal) return;
+
+        // 【修正】データソースの優先順位を変更
+        // 新しいDrag&Dropカート(cartProjects)がある場合はそこからタイトルを取得
+        let mainProjectName = '';
+        if (cartProjects && cartProjects.length > 0) {
+          mainProjectName = cartProjects[0].title;
+        } else if (cartMeta && cartMeta.projectNames && cartMeta.projectNames[0]) {
+          // 古いフローのバックアップ
+          mainProjectName = cartMeta.projectNames[0];
+        }
+
+        const booked = currentUser?.email || '';
+
+        // バリデーション修正
+        if (!mainProjectName) {
+          showMessage('作品名が入力されていません。', 'error');
+          return;
+        }
+        if (!booked) {
+          // ensureAuthでチェック済みのはずだが念の為
+          showMessage('ログイン情報が取得できませんでした。もう一度サインインしてください。', 'error');
+          return;
+        }
+
+        modal.innerHTML = `
+      <div class="bg-white rounded-lg shadow-xl max-w-lg w-full p-6">
+        <h3 class="text-xl font-bold mb-4">最終確認</h3>
+        <p class="text-sm text-gray-600 mb-4">作品名：<span class="font-bold text-black">${mainProjectName}</span> 他</p>
+        
+        <div class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700">インティマシーシーンの有無</label>
+            <div class="mt-2 flex space-x-4">
+              <label class="inline-flex items-center">
+                <input type="radio" name="intimacy" value="あり" class="form-radio">
+                <span class="ml-2 font-bold text-red-600">あり</span>
+              </label>
+              <label class="inline-flex items-center">
+                <input type="radio" name="intimacy" value="なし" class="form-radio" checked>
+                <span class="ml-2">なし</span>
+              </label>
+              <label class="inline-flex items-center">
+                <input type="radio" name="intimacy" value="未定" class="form-radio">
+                <span class="ml-2">未定</span>
+              </label>
+            </div>
+            <p class="text-xs text-gray-500 mt-1">※「あり」を選択すると、備考欄に自動追記されます。</p>
+          </div>
+          <div class="bg-yellow-50 p-3 rounded border border-yellow-200">
+            <label class="flex items-start cursor-pointer">
+              <input id="child-actor-check" type="checkbox"
+                     class="mt-1 h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
+              <span class="ml-3 text-sm text-gray-700 leading-snug">
+                <strong>未成年者（18歳未満）</strong>が含まれる場合、<br>
+                労働基準法（深夜労働の禁止・労働時間制限など）および関連法規を遵守した撮影計画であることを確認しました。
+              </span>
+            </label>
+          </div>
+        </div>
+        <div class="mt-6 flex justify-end gap-3">
+          <button id="confirm-cancel" class="px-4 py-2 rounded-md border border-gray-300 hover:bg-gray-50">キャンセル</button>
+          <button id="confirm-final" class="px-6 py-2 rounded-md bg-blue-600 text-white font-bold shadow hover:bg-blue-700">
+            同意して送信
+          </button>
+        </div>
+      </div>
+    `;
+        modal.classList.remove('hidden');
+
+        // イベント設定
+        modal.querySelector('#confirm-cancel').addEventListener('click', closeConfirmationModal);
+
+        // 送信ボタンクリック時
+        modal.querySelector('#confirm-final').addEventListener('click', async () => {
+          const intimacyValue = modal.querySelector('input[name="intimacy"]:checked').value;
+          const childActorConfirmed = modal.querySelector('#child-actor-check').checked;
+
+          // 子役が含まれているか簡易チェック (cart内の全キャストを対象)
+          const hasChildActor = Object.values(cart).some(item =>
+            item.cast && item.cast.age !== null && item.cast.age < 18
+          );
+
+          if (hasChildActor && !childActorConfirmed) {
+            showMessage(
+              '未成年キャストが含まれています。法令遵守の確認にチェックを入れてください。',
+              'error'
+            );
+            return;
+          }
+
+          // ★ここで実際の送信処理 (processNewOrderFromModal) を呼ぶ
+          await processNewOrderFromModal({
+            intimacy: intimacyValue === 'あり',
+            childConfirmed: childActorConfirmed
+          });
+        });
+      }
+
+      function closeConfirmationModal() {
+        const modal = document.getElementById('confirmation-modal');
+        if (modal) modal.classList.add('hidden');
+      }
+
+      // Progress Bar Functions
+      function showProgressBar(message = "処理中...", percent = 0) {
+        const modal = document.getElementById('progress-modal');
+        if (modal) {
+          modal.classList.remove('hidden');
+          updateProgressBar(message, percent);
+        }
+      }
+
+      function updateProgressBar(message, percent) {
+        const titleEl = document.getElementById('progress-title');
+        const msgEl = document.getElementById('progress-message');
+        const barEl = document.getElementById('progress-bar-fill');
+        const percentEl = document.getElementById('progress-percent');
+
+        if (titleEl) titleEl.textContent = "処理中..."; // Or dynamic title
+        if (msgEl) msgEl.textContent = message;
+        if (barEl) barEl.style.width = `${percent}%`;
+        if (percentEl) percentEl.textContent = `${percent}%`;
+      }
+
+      function hideProgressBar() {
+        const modal = document.getElementById('progress-modal');
+        if (modal) modal.classList.add('hidden');
+      }
+
+      // モーダルから呼ばれるラッパー関数
+      async function processNewOrderFromModal(options) {
+        const teamName = selectedShooting ? selectedShooting.team : (currentUser?.name || '不明');
         const pageId = selectedShooting ? selectedShooting.pageId : '';
         const notionUrl = pageId ? `https://www.notion.so/${pageId.replace(/-/g, '')}` : '';
 
-        // Resolve CCs
+        // CC設定
         let ccString = "";
         if (selectedShooting && window.internalCastMap) {
           const names = [];
           if (selectedShooting.cd) names.push(...selectedShooting.cd.split(/[,、]/).map(s => s.trim()));
           if (selectedShooting.fd) names.push(...selectedShooting.fd.split(/[,、]/).map(s => s.trim()));
-
           const ccIds = new Set();
           names.forEach(name => {
-            if (window.internalCastMap.has(name)) {
-              ccIds.add(window.internalCastMap.get(name));
-            }
+            if (window.internalCastMap.has(name)) ccIds.add(window.internalCastMap.get(name));
           });
-
-          if (ccIds.size > 0) {
-            ccString = Array.from(ccIds).map(uid => `<@${uid}>`).join(' ');
-          }
+          if (ccIds.size > 0) ccString = Array.from(ccIds).map(uid => `<@${uid}>`).join(' ');
         }
 
-        // Construct Order Data (Flattened for Sheet)
-        // We need to call confirmProvisionalBookings-like logic but adapted for this structure.
-        // Or just construct the payload and call sendOrder directly?
-        // Existing `confirmProvisionalBookings` does a lot (sheet update, calendar, slack).
-        // Let's adapt `confirmProvisionalBookings` to accept our new structure or create a new handler.
-        // Since the structure is quite different (Project -> Role -> Candidates), let's create a new handler `processNewOrder`.
+        // showLoader(true); // Disable global loader in favor of progress bar
+        showProgressBar("処理を開始します...", 10);
 
-        showLoader(true);
         try {
           await processNewOrder({
-            accountName,
-            pageId,
-            notionUrl,
+            accountName: teamName,
+            pageId: pageId,
+            notionUrl: notionUrl,
             projects: cartProjects,
-            ccString,
-            slackThreadTs: isAdditionalOrderMode && additionalOrderContext ? additionalOrderContext.slackThreadTs : null // Pass Thread TS
+            ccString: ccString,
+            slackThreadTs: isAdditionalOrderMode && additionalOrderContext ? additionalOrderContext.slackThreadTs : null,
+            // ★追加オプション
+            intimacy: options.intimacy
           });
+
+          updateProgressBar("完了しました", 100);
+          await new Promise(r => setTimeout(r, 500)); // Show 100% briefly
+
           closeCartModal();
-          // Clear cart?
+          closeConfirmationModal(); // モーダルも閉じる
+
+          // Reset
           cart = {};
           cartProjects = [];
           updateCartCount();
           displayAvailableCasts();
+
           showMessage('オーダーを送信しました。', 'success');
+
+          // ステータス反映のため少し待って再読み込み
+          setTimeout(() => loadAllData(), 2000);
+
         } catch (e) {
           console.error(e);
           if (e.status === 401 || e.result?.error?.code === 401) {
-            showMessage('Google認証が切れました。再ログインしてください。', 'error');
-            // Optional: tokenClient.requestAccessToken();
+            // ensureAuthでカバーしているはずだが念の為
+            showMessage('認証エラーが発生しました。リロードして再ログインしてください。', 'error');
           } else {
             showMessage('オーダー送信に失敗しました: ' + (e.message || 'Unknown error'), 'error');
           }
         } finally {
-          showLoader(false);
+          // showLoader(false);
+          hideProgressBar();
         }
       }
 
+      // 実際のデータ構築とAPI送信を行う関数
       async function processNewOrder(data) {
-        // 1. Prepare Data
         const shootDate = selectedShooting ? selectedShooting.date : (selectedDates[0] || '');
         const nowISO = new Date().toISOString();
         const updaterEmail = currentUser?.email || '';
         const internalEvents = [];
-        const tempAssignments = {}; // For priority calculation
+        const tempAssignments = {};
 
-        // Collect all orders from all projects
+        // Collect all orders & Apply Intimacy Note & Conflict Check
         const allOrders = data.projects.flatMap(proj =>
           proj.roles.flatMap((role, rIdx) =>
             role.castIds.map((cid, cIdx) => {
               const cast = cart[cid]?.cast;
               const isInternal = cast?.isInternal;
+
+              // ★ インティマシーシーンありの場合、備考に追記
+              let finalNote = role.note || '';
+              if (data.intimacy) {
+                finalNote = "【インティマシーシーンあり】\n" + finalNote;
+              }
+
+              // ★★★ 追加: 競合チェック (Conflict Check) for Drag & Drop Cart ★★★
+              let conflictMsg = null;
+              const targetEpoch = toEpochDay(shootDate);
+
+              if (targetEpoch) {
+                const conflict = castingData.find(c => {
+                  // 1. ステータスチェック（キャンセル・NG・完了は無視）
+                  if (['キャンセル', 'NG', 'キャスティング完了'].includes(c.status)) return false;
+
+                  // 2. キャストIDチェック
+                  if (c.castId !== cid) return false;
+
+                  // 3. 日付重複チェック
+                  const startEpoch = toEpochDay(c.startDate);
+                  const endEpoch = toEpochDay(c.endDate);
+                  if (startEpoch === null || endEpoch === null) return false;
+
+                  // 範囲外なら無視
+                  if (targetEpoch < startEpoch || targetEpoch > endEpoch) return false;
+
+                  // 4. 「自分自身の更新」を除外するロジック
+                  const isSameAccount = (c.accountName || '').trim() === (data.accountName || '').trim();
+                  const isSameProject = (c.projectName || '').trim() === (proj.title || '').trim();
+
+                  if (isSameAccount && isSameProject) {
+                    return false; // 自分自身の追加オーダーなので競合ではない
+                  }
+
+                  // ここまで来たら競合
+                  return true;
+                });
+
+                if (conflict) {
+                  const holder = conflict.accountName || '他チーム';
+                  conflictMsg = `※先に【${holder}】がキャスティングしています（${conflict.status}）。`;
+                  console.warn("🚨 Conflict Detected (D&D):", {
+                    me: { account: data.accountName, project: proj.title, date: shootDate },
+                    other: { account: conflict.accountName, project: conflict.projectName, status: conflict.status }
+                  });
+                }
+              }
+              // ★★★ 追加ここまで ★★★
+
               return {
-                castingId: 'temp_' + Date.now() + '_' + Math.random(), // Temp ID
+                castingId: 'temp_' + Date.now() + '_' + Math.random(),
                 roleName: role.name,
                 castName: cast?.name || '不明',
                 rank: cIdx + 1,
-                note: role.note,
+                note: finalNote.trim(),
                 projectName: proj.title,
                 slack_user_id: isInternal ? cast.slackMentionId : null,
                 castId: cid,
                 cast: cast,
-                type: role.type
+                type: role.type,
+                conflictInfo: conflictMsg // ★追加: これでSlack通知にアラートが含まれます
               };
             })
           )
@@ -3475,10 +4316,31 @@ ${roleName}：${item.cast.name}`;
 
         if (allOrders.length === 0) return;
 
-        // Unique Project Names for Top Level
         const uniqueProjectNames = [...new Set(data.projects.map(p => p.title))].join(' / ');
 
-        // 2. Send Slack Notification (ONE request)
+        // ★★★ 追加: ProjectIDに基づくスレッド自動引き当てロジック ★★★
+        let targetThreadTs = data.slackThreadTs || null;
+        let isAdditional = !!targetThreadTs; // 明示的に渡された場合は追加扱い
+
+        // スレッドIDが未指定だが、ProjectID (=PageID) がある場合 -> 過去ログを検索
+        // Note: processNewOrderFromModal passes 'pageId', not 'projectId'
+        const searchProjectId = data.projectId || data.pageId;
+
+        if (!targetThreadTs && searchProjectId) {
+          // castingDataから「同じProjectID」かつ「スレッドIDを持っている」レコードを探す
+          const existingRecord = castingData.find(c =>
+            c.projectId === searchProjectId && c.slackThreadTs
+          );
+
+          if (existingRecord) {
+            console.log("Found existing thread for ProjectID:", searchProjectId, existingRecord.slackThreadTs);
+            targetThreadTs = existingRecord.slackThreadTs;
+            isAdditional = true; // 自動引き当て成功 -> 追加オーダー扱い
+          }
+        }
+        // ★★★ 追加ここまで ★★★
+
+        // 2. Send Slack Notification Payload
         const payload = {
           accountName: data.accountName,
           projectName: uniqueProjectNames,
@@ -3491,25 +4353,43 @@ ${roleName}：${item.cast.name}`;
             rank: o.rank,
             note: o.note,
             projectName: o.projectName,
-            slack_user_id: o.slack_user_id
+            slack_user_id: o.slack_user_id,
+            conflictInfo: o.conflictInfo
           })),
           orderType: "pattern_a",
           ccString: data.ccString || "",
-          slackThreadTs: data.slackThreadTs || null // Include in payload
+          slackThreadTs: targetThreadTs, // ★変更: 自動取得したIDを使用
+          isAdditionalOrder: isAdditional // ★追加: フラグを送信
         };
 
-        // PDF Upload
-        const fileInput = document.getElementById('order-pdf-file');
-        const file = fileInput?.files?.[0];
+        // PDF Upload - Multiple Files Support
+        // まず退避データを確認し、なければDOMから取得（フォールバック）
+        let files = cartMeta.pdfFiles;
+
+        if (!files || files.length === 0) {
+          const fileInput = document.getElementById('order-pdf-file');
+          files = fileInput?.files;
+        }
 
         const formData = new FormData();
         formData.append('payload_str', JSON.stringify(payload));
-        if (file) {
-          formData.append('file', file);
+
+        if (files && files.length > 0) {
+          for (let i = 0; i < files.length; i++) {
+            formData.append('files', files[i], files[i].name);
+          }
         }
+
+        // Debug Log
+        console.log("--- Sending Order ---", {
+          threadTs: payload.slackThreadTs,
+          conflictCheck: allOrders.map(o => o.conflictInfo).filter(Boolean)
+        });
 
         let slackThreadTs = '';
         let slackPermalink = '';
+
+        updateProgressBar("Slackに通知を送信中...", 30);
 
         try {
           const slackRes = await fetch('/api/notify/order_created', {
@@ -3519,54 +4399,40 @@ ${roleName}：${item.cast.name}`;
 
           if (!slackRes.ok) throw new Error('Slack notification failed');
           const slackData = await slackRes.json();
-          // If additional order, use the ORIGINAL thread TS for the sheet (so future updates stay in the same thread)
-          // If new order, use the new message TS.
+
+          // 追加オーダーの場合は元のスレッドIDを維持、新規なら新しいIDを採用
           slackThreadTs = data.slackThreadTs || slackData.ts;
           slackPermalink = slackData.permalink;
         } catch (e) {
-          console.error("Slack Send Error:", e);
-          showMessage('Slack通知に失敗しましたが、シートへの保存は続行します。', 'error');
+          console.error("Slack notification error:", e);
         }
 
-        // 3. Prepare Sheet Rows (Merged by Cast ID)
-        const newRows = [];
+        updateProgressBar("スプレッドシートに書き込み中...", 60);
 
-        // Group by Cast ID
+        // 3. Prepare Sheet Rows
+        const newRows = [];
         const castGroups = new Map();
         allOrders.forEach(o => {
-          if (!castGroups.has(o.castId)) {
-            castGroups.set(o.castId, []);
-          }
+          if (!castGroups.has(o.castId)) castGroups.set(o.castId, []);
           castGroups.get(o.castId).push(o);
         });
 
-        // Create Rows
         for (const [castId, orders] of castGroups) {
           const firstOrder = orders[0];
           const cast = firstOrder.cast;
 
-          // Merge Fields
           const mergedProjectName = [...new Set(orders.map(o => o.projectName))].join(' / ');
           const mergedRoleName = orders.map(o => o.roleName).join(' / ');
           const mergedType = [...new Set(orders.map(o => o.type))].join(' / ');
           const mergedNote = orders.map(o => o.note).filter(n => n).join(' / ');
 
-          // Use the lowest rank (best rank) or just 1?
-          // If Cast is Rank 1 in Proj A and Rank 2 in Proj B...
-          // Sheet has one Rank column.
-          // Let's use the minimum rank.
           const minRank = Math.min(...orders.map(o => o.rank));
-
           const castingId = 'casting_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-
-          // Priority Calculation
           const castPriority = getNextCastPriority(castId, shootDate, shootDate, tempAssignments);
           tempAssignments[`${castId}_${shootDate}_${shootDate}`] = castPriority;
 
-          // Status Logic
           const initialStatus = cast.isInternal ? '打診中' : 'オーダー待ち';
 
-          // Internal Event Data
           if (cast.isInternal) {
             internalEvents.push({
               accountName: data.accountName,
@@ -3578,11 +4444,9 @@ ${roleName}：${item.cast.name}`;
               start: shootDate,
               end: shootDate,
               email: cast.email,
-              // rowNumber will be set after append
             });
           }
 
-          // Structure Data (Project -> Role -> Rank mapping)
           const structureData = orders.map(o => ({
             project: o.projectName,
             role: o.roleName,
@@ -3593,33 +4457,15 @@ ${roleName}：${item.cast.name}`;
           const structureJson = JSON.stringify(structureData);
 
           newRows.push([
-            castingId,          // A
-            data.accountName,   // B
-            mergedProjectName,  // C
-            mergedRoleName,     // D
-            cast.castId,        // E
-            cast.name,          // F
-            shootDate,          // G (Start)
-            shootDate,          // H (End)
-            minRank.toString(), // I (Rank)
-            initialStatus,      // J (Status)
-            mergedNote,         // K
-            slackThreadTs,      // L
-            slackPermalink,     // M
-            mergedType,         // N (Main/Sub)
-            '',                 // O (CalendarEventID)
-            data.pageId,        // P (ProjectID / NotionID)
-            nowISO,             // Q
-            updaterEmail,       // R
-            castPriority,       // S (Priority)
-            cast.isInternal ? '内部' : '外部', // T
-            cast.email || '',   // U (Email)
-            '',                 // V (Cost)
-            structureJson       // W (Structure Data)
+            castingId, data.accountName, mergedProjectName, mergedRoleName,
+            cast.castId, cast.name, shootDate, shootDate, minRank.toString(),
+            initialStatus, mergedNote, slackThreadTs, slackPermalink,
+            mergedType, '', data.pageId, nowISO, updaterEmail, castPriority,
+            cast.isInternal ? '内部' : '外部', cast.email || '', '', structureJson
           ]);
         }
 
-        // 4. Batch Append to Sheet
+        // 4. Batch Append
         if (newRows.length > 0) {
           const appendResult = await gapi.client.sheets.spreadsheets.values.append({
             spreadsheetId: SPREADSHEET_ID,
@@ -3629,28 +4475,17 @@ ${roleName}：${item.cast.name}`;
             resource: { values: newRows }
           });
 
-          // Calculate Row Numbers for Internal Events
           const updatedRange = appendResult.result.updates.updatedRange;
           const match = updatedRange.match(/!A(\d+):/);
           if (match) {
             const startRow = parseInt(match[1], 10);
-
-            // Map castingId to row number
             const rowNumberByCastingId = new Map();
             for (let i = 0; i < newRows.length; i++) {
-              const castingId = newRows[i][0];
-              const rowNum = startRow + i;
-              if (castingId) {
-                rowNumberByCastingId.set(castingId, rowNum);
-              }
+              if (newRows[i][0]) rowNumberByCastingId.set(newRows[i][0], startRow + i);
             }
-
-            // Assign row numbers to internalEvents
             internalEvents.forEach(ev => {
               ev.rowNumber = rowNumberByCastingId.get(ev.castingId) || null;
             });
-
-            // Create Calendar Events
             await createInternalHoldEvents(internalEvents);
           }
         }
@@ -3659,6 +4494,13 @@ ${roleName}：${item.cast.name}`;
       window.closeCartModal = function () {
         const modal = document.getElementById('cart-modal');
         if (!modal) return;
+
+        // ★追加: カートを閉じる時に、保存されていたPDFファイル情報を確実にクリアする
+        if (cartMeta && cartMeta.pdfFiles) {
+          delete cartMeta.pdfFiles;
+          console.log("PDF files cleared from memory.");
+        }
+
         modal.classList.add('hidden');
         modal.innerHTML = '';
         // Reset state? Maybe keep it if user accidentally closes?
@@ -3725,7 +4567,7 @@ ${roleName}：${item.cast.name}`;
             <div class="p-4 border-t bg-white flex justify-between items-center">
               <div class="flex items-center gap-2">
                  <label class="text-sm font-bold text-gray-600">PDF添付:</label>
-                 <input type="file" id="order-pdf-file" accept="application/pdf" class="text-sm text-gray-600 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+                 <input type="file" id="order-pdf-file" accept="application/pdf" multiple class="text-sm text-gray-600 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
               </div>
               <div class="flex gap-3">
                 <button onclick="closeCartModal()" class="px-4 py-2 rounded-md border border-gray-300">閉じる</button>
@@ -3950,93 +4792,7 @@ ${roleName}：${item.cast.name}`;
         });
       }
 
-      function renderConfirmationModal() {
-        const modal = document.getElementById('confirmation-modal');
-        if (!modal) return;
 
-        const project = cartMeta.projectNames?.[0] || '';
-        const booked = currentUser?.email || '';
-
-        if (!project) {
-          showMessage('STEP1で作品名1を入力してください。', 'error');
-          return;
-        }
-        if (!booked) {
-          showMessage('ログイン情報が取得できませんでした。もう一度サインインしてください。', 'error');
-          return;
-        }
-
-        modal.innerHTML = `
-      <div class="bg-white rounded-lg shadow-xl max-w-lg w-full p-6">
-        <h3 class="text-xl font-bold mb-4">最終確認</h3>
-        <div class="space-y-4">
-          <div>
-            <label class="block text-sm font-medium text-gray-700">インティマシーシーンの有無</label>
-            <div class="mt-2 flex space-x-4">
-              <label class="inline-flex items-center">
-                <input type="radio" name="intimacy" value="あり" class="form-radio">
-                <span class="ml-2">あり</span>
-              </label>
-              <label class="inline-flex items-center">
-                <input type="radio" name="intimacy" value="なし" class="form-radio" checked>
-                <span class="ml-2">なし</span>
-              </label>
-              <label class="inline-flex items-center">
-                <input type="radio" name="intimacy" value="未定" class="form-radio">
-                <span class="ml-2">未定</span>
-              </label>
-            </div>
-          </div>
-          <div>
-            <label class="flex items-start">
-              <input id="child-actor-check" type="checkbox"
-                     class="h-5 w-5 text-blue-600 border-gray-300 rounded mt-1">
-              <span class="ml-3 text-sm text-gray-700">
-                子役（15歳未満）が含まれる場合、法定労働時間や休憩、深夜労働の制限など、
-                関連法規を遵守した撮影計画であることを確認しました。
-              </span>
-            </label>
-          </div>
-        </div>
-        <div class="mt-6 flex justify-end gap-3">
-          <button id="confirm-cancel" class="px-4 py-2 rounded-md border border-gray-300">キャンセル</button>
-          <button id="confirm-final" class="px-4 py-2 rounded-md bg-blue-600 text-white font-semibold">
-            同意して確定
-          </button>
-        </div>
-      </div>
-    `;
-        modal.classList.remove('hidden');
-
-        modal.querySelector('#confirm-cancel').addEventListener('click', closeConfirmationModal);
-        modal.querySelector('#confirm-final').addEventListener('click', () => {
-          const intimacyValue = modal.querySelector('input[name="intimacy"]:checked').value;
-          const childActorConfirmed = modal.querySelector('#child-actor-check').checked;
-
-          const hasChildActor = Object.values(cart).some(item => item.cast.age !== null && item.cast.age < 15);
-
-          if (hasChildActor && !childActorConfirmed) {
-            showMessage(
-              '子役が含まれています。稼働時間に関する規定の確認にチェックを入れてください。',
-              'error'
-            );
-            return;
-          }
-
-          confirmProvisionalBookings({
-            intimacyScene: intimacyValue,
-            childActorCheck: childActorConfirmed,
-          });
-        });
-      }
-
-      function closeConfirmationModal() {
-        const modal = document.getElementById('confirmation-modal');
-        if (modal) {
-          modal.classList.add('hidden');
-          modal.innerHTML = '';
-        }
-      }
 
       // C-2: 新規外部キャスト作成モーダル
       async function openNewExternalCastModal() {
@@ -4044,7 +4800,7 @@ ${roleName}：${item.cast.name}`;
         if (!modal) return;
 
         modal.innerHTML = `
-      <div class="bg-white rounded-lg shadow-xl max-w-md w-full p-5">
+          < div class="bg-white rounded-lg shadow-xl max-w-md w-full p-5" >
         <div class="flex items-center justify-between mb-3">
           <h3 class="text-lg font-bold">新規外部キャストを追加</h3>
           <button id="new-cast-close" class="text-gray-600 hover:text-gray-800">&times;</button>
@@ -4079,7 +4835,7 @@ ${roleName}：${item.cast.name}`;
           <button id="new-cast-cancel" class="px-4 py-2 rounded-md border border-gray-300">キャンセル</button>
           <button id="new-cast-save" class="px-4 py-2 rounded-md bg-blue-600 text-white font-semibold">保存</button>
         </div>
-      </div>`;
+      </div > `;
 
         modal.classList.remove('hidden');
 
@@ -4164,7 +4920,7 @@ ${roleName}：${item.cast.name}`;
       // ========= Cart Step1 / Step2 =========
       function renderCartStep1(modal) {
         modal.innerHTML = `
-      <div class="bg-white rounded-lg shadow-xl max-w-lg w-full p-6">
+          < div class="bg-white rounded-lg shadow-xl max-w-lg w-full p-6" >
         <div class="flex items-center justify-between mb-4">
           <h3 class="text-xl font-bold">STEP1：オーダー情報の入力</h3>
           <button id="cart-step1-close" class="text-gray-500 hover:text-gray-700">
@@ -4194,15 +4950,15 @@ ${roleName}：${item.cast.name}`;
           </div>
           <div class="mb-6">
             <label class="block text-sm font-medium text-gray-700 mb-1">PDFファイル添付 (任意)</label>
-            <input type="file" id="cart-pdf-file" accept="application/pdf" class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+            <input type="file" id="cart-pdf-file" accept="application/pdf" multiple class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
             <p class="text-xs text-gray-500 mt-1">※Slack通知のスレッドにアップロードされます。</p>
           </div>
           <div class="flex justify-end">
             <button id="cart-step1-next" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">次へ</button>
           </div>
         </div>
-      </div>
-    `;
+      </div >
+          `;
         modal.classList.remove('hidden');
 
         // Restore file input if exists in memory (Note: file input value cannot be set programmatically for security, so we just keep the object in cartMeta)
@@ -4226,7 +4982,7 @@ ${roleName}：${item.cast.name}`;
           cartMeta.notionUrl = not;
 
           if (fileInput.files.length > 0) {
-            cartMeta.pdfFile = fileInput.files[0];
+            cartMeta.pdfFiles = fileInput.files;
           }
 
           // A-1: 組み合わせ作品名を生成
@@ -4430,8 +5186,16 @@ ${roleName}：${item.cast.name}`;
       document.getElementById('shooting-contact-btn')?.addEventListener('click', showShootContactPage);
 
       // (1790行目付近の nav-cart イベントリスナーは残す)
+      // (1790行目付近の nav-cart イベントリスナーは残す)
       document.getElementById('nav-cart')?.addEventListener('click', e => {
         e.preventDefault();
+
+        // 撮影が選択されていない場合の分岐
+        if (!selectedShooting) {
+          document.getElementById('no-shooting-popup').classList.remove('hidden');
+          return;
+        }
+
         const modal = document.getElementById('cart-modal');
         if (!modal) return;
 
@@ -4442,6 +5206,130 @@ ${roleName}：${item.cast.name}`;
         }
         modal.classList.remove('hidden');
         renderCartModal();
+      });
+
+      // No Shooting Popup Events
+      document.getElementById('btn-popup-back')?.addEventListener('click', () => {
+        document.getElementById('no-shooting-popup').classList.add('hidden');
+      });
+
+      document.getElementById('btn-order-external')?.addEventListener('click', () => {
+        openSpecialOrderModal('external');
+      });
+
+      document.getElementById('btn-order-internal')?.addEventListener('click', () => {
+        openSpecialOrderModal('internal');
+      });
+
+      // Special Order Logic
+      let currentSpecialOrderType = 'external';
+
+      function openSpecialOrderModal(type) {
+        document.getElementById('no-shooting-popup').classList.add('hidden');
+        const modal = document.getElementById('special-order-modal');
+        modal.classList.remove('hidden');
+        currentSpecialOrderType = type;
+
+        document.getElementById('special-order-title').textContent = type === 'external' ? '外部案件オーダー' : '社内イベントオーダー';
+
+        // Handle Dates
+        const dateListEl = document.getElementById('special-order-date-list');
+        const datesJsonEl = document.getElementById('special-order-dates-json');
+
+        // Use selectedDates if available, otherwise default to today
+        let targetDates = selectedDates.length > 0 ? [...selectedDates] : [new Date().toISOString().split('T')[0]];
+        targetDates.sort();
+
+        dateListEl.textContent = targetDates.join(', ');
+        datesJsonEl.value = JSON.stringify(targetDates);
+
+        // Cast List
+        const castListEl = document.getElementById('special-order-cast-list');
+        const castNames = Object.values(cart).map(c => c.cast?.name || c.castName || '不明').join(', ');
+        castListEl.textContent = castNames || 'キャストが選択されていません';
+      }
+
+      document.getElementById('btn-special-cancel')?.addEventListener('click', () => {
+        document.getElementById('special-order-modal').classList.add('hidden');
+      });
+
+      document.getElementById('btn-special-submit')?.addEventListener('click', async () => {
+        const title = document.getElementById('special-order-name').value;
+        const datesJson = document.getElementById('special-order-dates-json').value;
+        const start = document.getElementById('special-order-start').value;
+        const end = document.getElementById('special-order-end').value;
+        const castIds = Object.keys(cart);
+
+        if (!title || !datesJson || !start || !end) {
+          alert('すべての項目を入力してください');
+          return;
+        }
+        if (castIds.length === 0) {
+          alert('キャストが選択されていません。カートにキャストを追加してください。');
+          return;
+        }
+
+        const dates = JSON.parse(datesJson);
+        const userEmail = currentUser?.email || 'unknown@example.com';
+
+        showProgressBar("処理を開始します...", 10);
+
+        try {
+          const payload = {
+            orderType: currentSpecialOrderType,
+            title: title,
+            dates: dates, // Changed from date to dates
+            startTime: start,
+            endTime: end,
+            castIds: castIds,
+            ordererEmail: userEmail
+          };
+
+          updateProgressBar("オーダー送信中...", 50);
+
+          const res = await fetch('/api/notify/special_order', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+
+          if (!res.ok) throw new Error('Order failed');
+
+          // ★追加: レスポンスデータの取得とカレンダー登録
+          const data = await res.json();
+
+          if (data.calendar_events && data.calendar_events.length > 0) {
+            updateProgressBar("カレンダー登録中...", 80);
+            console.log("Creating calendar events:", data.calendar_events);
+            // 既存の関数を使ってカレンダー登録＆シート書き戻し
+            await createInternalHoldEvents(data.calendar_events);
+          }
+
+          updateProgressBar("完了しました", 100);
+          await new Promise(r => setTimeout(r, 500));
+
+          document.getElementById('special-order-modal').classList.add('hidden');
+          cart = {};
+          updateCartCount();
+          displayAvailableCasts();
+          showMessage('オーダーを送信しました', 'success');
+
+          // データ再読み込みして表示更新
+          setTimeout(() => {
+            // ★もしタブがcastingならspecialに切り替えてあげる
+            if (window.currentStatusTab !== 'special') {
+              window.currentStatusTab = 'special';
+              switchView('status-view');
+            }
+            renderCastingStatusView(true);
+          }, 1500);
+
+        } catch (e) {
+          console.error(e);
+          showMessage('送信に失敗しました', 'error');
+        } finally {
+          hideProgressBar();
+        }
       });
 
       document.getElementById('authorize_button')?.addEventListener('click', handleAuthClick);
@@ -4487,6 +5375,7 @@ ${roleName}：${item.cast.name}`;
       document.head.appendChild(gapiScript);
       document.head.appendChild(gisScript); // ★ここを修正しました
     });
+
   </script>
 </body>
 
