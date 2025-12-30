@@ -41,6 +41,7 @@ SLACK_CHANNEL_TEST = os.getenv("SLACK_CHANNEL_TEST")
 SLACK_CHANNEL_TYPE_A = os.getenv("SLACK_CHANNEL_TYPE_A")
 SLACK_CHANNEL_TYPE_B = os.getenv("SLACK_CHANNEL_TYPE_B")
 SLACK_MENTION_GROUP_ID = os.getenv("SLACK_MENTION_GROUP_ID")
+SLACK_CHANNEL_EXTERNAL = os.getenv("SLACK_CHANNEL_EXTERNAL")
 
 CALENDAR_ID_INTERNAL_HOLD = os.getenv("CALENDAR_ID_INTERNAL_HOLD")
 GAS_URL_NOTION_SYNC = os.getenv("GAS_URL_NOTION_SYNC")
@@ -533,9 +534,15 @@ async def notify_special_order(payload: SpecialOrderPayload):
 
             ts = None
             permalink = ""
+            target_channel = SLACK_DEFAULT_CHANNEL
+
+            if payload.orderType == "external":
+                if SLACK_CHANNEL_EXTERNAL:
+                    target_channel = SLACK_CHANNEL_EXTERNAL
+
             try:
                 resp = await slack_client.chat_postMessage(
-                    channel=SLACK_DEFAULT_CHANNEL,
+                    channel=target_channel,
                     text=msg
                 )
                 ts = resp.get("ts")
