@@ -1568,14 +1568,8 @@
           }
 
           // 「決定」の時、キャスト（内部含む）を撮影連絡DBへ追加
-          if (rec.isInternal) {
-          }
           if (newStatus === "決定" || newStatus === "OK") {
             const updaterEmail = currentUser?.email || '';
-
-            // 香盤DBからデータを検索
-            const scheduleKey = `${rec.castId}_${rec.startDate}`;
-            const scheduleInfo = shootingScheduleData.get(scheduleKey) || {};
 
             try {
               const addRes = await fetch("/api/shooting_contact/add", {
@@ -2444,11 +2438,20 @@ X、Instagram、YouTube
       }
 
       function updateCartFromShooting() {
-        // Update global cartMeta or similar if needed?
-        // The user said: "取得できるデータは、カート内のSTEP1で入力していた、アカウント名、NotionIDになります。"
-        // "一旦ここまでできたら、カートの変更を伝えます。"
-        // So for now, I just need to store it in `selectedShooting`.
-        // I will log it for debug.
+        // 選択された撮影情報をメタデータにセット（確認画面や古いフローでの互換性のため）
+        if (selectedShooting) {
+          cartMeta.account = selectedShooting.team;
+          cartMeta.notionUrl = selectedShooting.pageId ? `https://www.notion.so/${selectedShooting.pageId.replace(/-/g, '')}` : '';
+          cartMeta.projectNames[0] = selectedShooting.title;
+
+          // カートプロジェクトがまだ空なら、このタイトルで初期化する
+          if (cartProjects.length === 0) {
+            window.addCartProject();
+            cartProjects[0].title = selectedShooting.title;
+          } else if (cartProjects.length === 1 && !cartProjects[0].title) {
+            cartProjects[0].title = selectedShooting.title;
+          }
+        }
       }
 
       // ========= Cart =========
@@ -4155,7 +4158,6 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
           }
         });
       };
-      {% endraw %}
 
       window.copyToClipboardAndClose = async function () {
         const modal = document.getElementById('shoot-mail-modal');
@@ -4200,6 +4202,7 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
 
         modal.classList.add('hidden');
       };
+      {% endraw %}
 
       function openShootStatusModal(castingId, currentStatus) {
         // Legacy manual update if needed, but "Copy" is now the primary driver.
@@ -4238,18 +4241,13 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
       // Generic Update Function for Shooting Contact Fields
       window.updateShootingContactFields = async function (id, fields) {
         try {
-          // Calculate cost if IN/OUT changed (Simple logic: just log for now, or implement if rate is known)
-          // For now just save the fields
-
           const payload = {
-            id: id,
+            castingId: id, // API expects 'castingId', not just 'id' depending on backend, but let's match saveShootingRow
             ...fields
           };
 
-          // If cost is not manually set but IN/OUT are, we could try to auto-calc here
-          // But we don't have hourly rate. So we skip auto-calc for now.
-
-          const res = await fetch("/api/shooting_contact/status", { // Reusing status endpoint or create new?
+          // ★修正: 正しいAPIエンドポイント (/update) を使用する
+          const res = await fetch("/api/shooting_contact/update", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload)
@@ -4258,12 +4256,13 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
           if (!res.ok) {
             throw new Error("Update failed");
           }
-          // Optional: Show toast
+          // Success (optional toast)
         } catch (e) {
           console.error(e);
           showMessage("更新に失敗しました", "error");
         }
       };
+
 
       // Sync Function (GAS Trigger)
       window.syncShootingSchedule = async function (btn, syncType = 'schedule') {
@@ -4499,8 +4498,18 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
 
       // モーダルから呼ばれるラッパー関数
       async function processNewOrderFromModal(options) {
-        const teamName = selectedShooting ? selectedShooting.team : (currentUser?.name || '不明');
-        const pageId = selectedShooting ? selectedShooting.pageId : '';
+        // ★修正: selectedShooting がない場合は additionalOrderContext を参照
+        let teamName = (currentUser?.name || '不明');
+        let pageId = '';
+
+        if (selectedShooting) {
+          teamName = selectedShooting.team;
+          pageId = selectedShooting.pageId;
+        } else if (isAdditionalOrderMode && additionalOrderContext) {
+          teamName = additionalOrderContext.accountName;
+          pageId = additionalOrderContext.projectId; // Notion Page ID
+        }
+
         const notionUrl = pageId ? `https://www.notion.so/${pageId.replace(/-/g, '')}` : '';
 
         // CC設定
@@ -4837,24 +4846,23 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
       }
 
       function renderNewCartModal(modal) {
-        const teamName = selectedShooting ? selectedShooting.team : (currentUser?.name || '不明');
-        const pageId = selectedShooting ? selectedShooting.pageId : '未選択';
+        let teamName = (currentUser?.name || '不明');
+        let pageId = '未選択';
 
-        // Cast Pool (only those in cart but not assigned to any role yet?)
-        // Or just list all in cart and allow dragging?
-        // User said: "カートに追加したキャストの名前が下に...並んでいる想定"
-        // Let's list all casts in `cart`.
-        // If assigned, maybe dim them or remove them?
-        // "追加した人は削除も可能" implies we move them.
-        // Let's assume "Pool" contains unassigned casts.
+        if (selectedShooting) {
+          teamName = selectedShooting.team;
+          pageId = selectedShooting.pageId;
+        } else if (isAdditionalOrderMode && additionalOrderContext) {
+          teamName = additionalOrderContext.accountName;
+          pageId = additionalOrderContext.projectId || '既存案件';
+        }
 
-        // Cast Pool: Show ALL casts in cart (User request: "消えないようにして欲しい")
+        // Cast Pool: Show ALL casts in cart
         const allCartCastIds = Object.keys(cart);
-        const poolCastIds = allCartCastIds; // No filtering
+        const poolCastIds = allCartCastIds;
 
         modal.innerHTML = `
           <div class="bg-white rounded-lg shadow-xl w-full max-w-6xl h-[90vh] flex flex-col">
-            <!-- Header -->
             <div class="flex items-center justify-between p-4 border-b bg-gray-50">
               <div>
                 <div class="text-sm text-gray-500">アカウント名: <span class="font-bold text-gray-800">${teamName}</span></div>
@@ -4865,24 +4873,26 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
               </button>
             </div>
 
-            <!-- Body -->
             <div class="flex-grow flex overflow-hidden">
-              <!-- Left: Cast Pool -->
               <div class="w-1/4 border-r bg-gray-50 flex flex-col">
                 <div class="p-3 font-bold text-gray-700 border-b">キャストプール</div>
+                
                 <div id="cart-cast-pool" class="flex-grow overflow-y-auto p-2 space-y-2">
                   ${poolCastIds.map(cid => renderDraggableCast(cid)).join('')}
                   ${poolCastIds.length === 0 ? '<div class="text-xs text-gray-400 text-center mt-4">キャストがいません</div>' : ''}
                 </div>
+
+                <div class="p-3 border-t bg-gray-100">
+                   <label class="text-xs font-bold text-gray-600 block mb-1">PDF添付 (任意):</label>
+                   <input type="file" id="order-pdf-file" accept="application/pdf" multiple class="w-full text-xs text-gray-600 file:mr-2 file:py-1 file:px-2 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+                </div>
               </div>
 
-              <!-- Right: Projects -->
               <div class="w-3/4 flex flex-col bg-white">
                 <div id="cart-projects-container" class="flex-grow overflow-y-auto p-4 space-y-6">
                   ${cartProjects.map(p => renderCartProject(p)).join('')}
                 </div>
                 
-                <!-- Add Project Button -->
                 <div class="p-4 border-t bg-gray-50 flex justify-center">
                   <button onclick="addCartProject()" class="flex items-center gap-2 text-blue-600 hover:text-blue-800 font-semibold">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
@@ -4892,12 +4902,7 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
               </div>
             </div>
 
-            <!-- Footer -->
-            <div class="p-4 border-t bg-white flex justify-between items-center">
-              <div class="flex items-center gap-2">
-                 <label class="text-sm font-bold text-gray-600">PDF添付:</label>
-                 <input type="file" id="order-pdf-file" accept="application/pdf" multiple class="text-sm text-gray-600 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
-              </div>
+            <div class="p-4 border-t bg-white flex justify-end items-center">
               <div class="flex gap-3">
                 <button onclick="closeCartModal()" class="px-4 py-2 rounded-md border border-gray-300">閉じる</button>
                 <button onclick="submitNewOrder()" class="px-6 py-2 rounded-md bg-blue-600 text-white font-bold shadow hover:bg-blue-700">
@@ -4931,21 +4936,46 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
       window.removeCastFromCart = function (castId) {
         if (cart[castId]) {
           delete cart[castId];
+
+          // ★追加修正: cartProjects (右側の作品・役リスト) からもこのキャストIDを除去する
+          if (cartProjects && cartProjects.length > 0) {
+            cartProjects.forEach(proj => {
+              if (proj.roles) {
+                proj.roles.forEach(role => {
+                  if (role.castIds) {
+                    role.castIds = role.castIds.filter(id => id !== castId);
+                  }
+                });
+              }
+            });
+          }
+
           updateCartCount();
-          renderCartModal(); // Re-render modal to update pool
+          renderCartModal(); // 再描画してプールと配置を更新
+          displayAvailableCasts();
         }
       };
 
       function renderCartProject(project) {
+        // ★修正: 作品数が1つしかない場合は削除ボタンを表示しない（または無効化）
+        const canDelete = cartProjects.length > 1;
+
+        const deleteButtonHtml = canDelete
+          ? `<button onclick="removeCartProject('${project.id}')" class="text-red-400 hover:text-red-600 p-1" title="作品を削除">
+               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+             </button>`
+          : `<button class="text-gray-300 p-1 cursor-not-allowed" title="これ以上削除できません" disabled>
+               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+             </button>`;
+
         return `
           <div class="border rounded-lg p-4 bg-gray-50 relative group" data-project-id="${project.id}">
             <div class="mb-3 flex items-center gap-2">
               <label class="text-sm font-bold text-gray-600 w-16">作品名</label>
               <input type="text" class="flex-grow border rounded px-2 py-1 text-sm font-bold" 
                      value="${project.title}" onchange="updateProjectTitle('${project.id}', this.value)" placeholder="作品名を入力">
-              <button onclick="removeCartProject('${project.id}')" class="text-red-400 hover:text-red-600 p-1" title="作品を削除">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-              </button>
+              
+              ${deleteButtonHtml}
             </div>
 
             <div class="space-y-3 pl-4 border-l-2 border-gray-200">
@@ -5036,6 +5066,12 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
         }
       }
       window.removeCartProject = function (pid) {
+        // ★修正: 作品数が1つ以下の場合は削除させない
+        if (cartProjects.length <= 1) {
+          showMessage('作品はこれ以上削除できません。', 'error');
+          return;
+        }
+
         cartProjects = cartProjects.filter(p => p.id !== pid);
         renderCartModal();
       };
