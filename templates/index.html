@@ -45,30 +45,72 @@
 <body class="bg-gray-100 text-gray-800">
 
   <header class="bg-white shadow-md sticky top-0 z-40">
-    <nav class="container mx-auto px-4 sm:px-6 py-3 flex justify-between items-center">
-      <h1 class="text-xl sm:text-2xl font-bold text-gray-800">キャスト管理システム ✨</h1>
-      <div class="hidden md:flex items-center space-x-4">
-        <button id="nav-casting"
-          class="nav-btn text-blue-600 border-b-2 border-blue-600 font-medium px-2 py-1">キャストを探す</button>
-        <button id="nav-status"
-          class="nav-btn text-gray-600 hover:text-blue-600 font-medium px-2 py-1">キャスティング状況</button>
-        <button id="nav-management"
-          class="nav-btn text-gray-600 hover:text-blue-600 font-medium px-2 py-1">管理画面</button>
-        <button id="nav-cart" class="relative text-gray-600 hover:text-blue-600">
-          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round"
-              d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-          </svg>
-          <span id="cart-count"
-            class="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">0</span>
-        </button>
+    <nav class="container mx-auto px-4 sm:px-6 py-3">
+      <div class="flex justify-between items-center">
+        <!-- Logo -->
+        <h1 class="text-xl sm:text-2xl font-bold text-gray-800">キャスト管理システム ✨</h1>
+
+        <!-- Desktop Navigation -->
+        <div class="hidden md:flex items-center space-x-4">
+          <button id="nav-casting"
+            class="nav-btn text-blue-600 border-b-2 border-blue-600 font-medium px-2 py-1">キャストを探す</button>
+          <button id="nav-status"
+            class="nav-btn text-gray-600 hover:text-blue-600 font-medium px-2 py-1">キャスティング状況</button>
+          <button id="nav-management"
+            class="nav-btn text-gray-600 hover:text-blue-600 font-medium px-2 py-1">管理画面</button>
+        </div>
+
+        <!-- Right Side: Cart + Auth + Hamburger -->
+        <div class="flex items-center space-x-2 md:space-x-4">
+          <!-- Cart Button (Visible on Mobile & Desktop) -->
+          <button id="nav-cart" class="relative text-gray-600 hover:text-blue-600 p-1">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round"
+                d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+            </svg>
+            <span id="cart-count"
+              class="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">0</span>
+          </button>
+
+          <!-- Desktop Auth -->
+          <div id="auth-container" class="hidden md:flex items-center">
+            <span id="user-name" class="hidden text-sm text-gray-700 mr-4"></span>
+            <button id="authorize_button"
+              class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-lg transition">サインイン</button>
+            <button id="signout_button"
+              class="hidden bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg">サインアウト</button>
+          </div>
+
+          <!-- Mobile Hamburger Button -->
+          <button id="mobile-menu-btn" class="md:hidden text-gray-600 hover:text-blue-600 focus:outline-none p-1">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
+            </svg>
+          </button>
+        </div>
       </div>
-      <div id="auth-container" class="hidden md:flex items-center">
-        <span id="user-name" class="hidden text-sm text-gray-700 mr-4"></span>
-        <button id="authorize_button"
-          class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-lg transition">サインイン</button>
-        <button id="signout_button"
-          class="hidden bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg">サインアウト</button>
+
+      <!-- Mobile Menu (Hidden by default) -->
+      <div id="mobile-menu" class="hidden md:hidden mt-4 pb-4 border-t pt-4">
+        <div class="flex flex-col space-y-3">
+          <button id="mobile-nav-casting"
+            class="text-left font-medium text-blue-600 px-2 py-1 bg-blue-50 rounded">キャストを探す</button>
+          <button id="mobile-nav-status"
+            class="text-left font-medium text-gray-600 hover:text-blue-600 px-2 py-1 hover:bg-gray-50 rounded">キャスティング状況</button>
+          <button id="mobile-nav-management"
+            class="text-left font-medium text-gray-600 hover:text-blue-600 px-2 py-1 hover:bg-gray-50 rounded">管理画面</button>
+
+          <hr class="border-gray-200 my-2">
+
+          <!-- Mobile Auth Buttons -->
+          <div id="mobile-auth-container" class="flex flex-col space-y-2">
+            <span id="mobile-user-name" class="hidden text-sm text-gray-700 px-2"></span>
+            <button id="mobile-authorize_button"
+              class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-lg transition w-full text-center">サインイン</button>
+            <button id="mobile-signout_button"
+              class="hidden bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg w-full text-center">サインアウト</button>
+          </div>
+        </div>
       </div>
     </nav>
   </header>
@@ -374,6 +416,13 @@
           b.classList.remove('text-blue-600', 'border-b-2', 'border-blue-600');
           if (b.id.includes(viewId.split('-')[0])) b.classList.add('text-blue-600', 'border-b-2', 'border-blue-600');
         });
+
+        // Render content for specific views
+        if (viewId === 'status-view') {
+          renderCastingStatusView(false);
+        } else if (viewId === 'management-view') {
+          showShootContactPage();
+        }
       }
       function updateSelectedPeriodDisplay() {
         const el = document.getElementById('selected-period-display'); if (!el) return;
@@ -476,6 +525,28 @@
         showMessage('サインアウトしました', 'info');
       }
 
+      // Mobile Menu Logic
+      const mobileMenuBtn = document.getElementById('mobile-menu-btn');
+      const mobileMenu = document.getElementById('mobile-menu');
+
+      if (mobileMenuBtn && mobileMenu) {
+        mobileMenuBtn.addEventListener('click', () => {
+          mobileMenu.classList.toggle('hidden');
+        });
+      }
+
+      function closeMobileMenu() {
+        if (mobileMenu) mobileMenu.classList.add('hidden');
+      }
+
+      document.getElementById('mobile-nav-casting')?.addEventListener('click', () => { switchView('casting-view'); closeMobileMenu(); });
+      document.getElementById('mobile-nav-status')?.addEventListener('click', () => { switchView('status-view'); closeMobileMenu(); });
+      document.getElementById('mobile-nav-management')?.addEventListener('click', () => { switchView('management-view'); closeMobileMenu(); });
+
+      document.getElementById('mobile-authorize_button')?.addEventListener('click', () => { handleAuthClick(); closeMobileMenu(); });
+      document.getElementById('mobile-signout_button')?.addEventListener('click', () => { handleSignoutClick(); closeMobileMenu(); });
+
+
       // APIコールの前に確実にトークンがあるかチェックする関数
       async function ensureAuth() {
         const token = gapi.client.getToken();
@@ -497,8 +568,23 @@
 
       async function updateUI(isAuthorized) {
         const auth = document.getElementById('authorize_button'), out = document.getElementById('signout_button');
+        const mAuth = document.getElementById('mobile-authorize_button'), mOut = document.getElementById('mobile-signout_button');
+
         if (auth) auth.style.display = isAuthorized ? 'none' : 'block';
         if (out) out.style.display = isAuthorized ? 'block' : 'none';
+        if (mAuth) mAuth.style.display = isAuthorized ? 'none' : 'block';
+        if (mOut) mOut.style.display = isAuthorized ? 'block' : 'none';
+
+        // Update Mobile User Name
+        const mUser = document.getElementById('mobile-user-name');
+        if (mUser) {
+          if (isAuthorized && currentUser) {
+            mUser.textContent = `ようこそ ${currentUser.name} さん`;
+            mUser.classList.remove('hidden');
+          } else {
+            mUser.classList.add('hidden');
+          }
+        }
 
         if (isAuthorized) {
           try {
@@ -1481,15 +1567,9 @@
             await postStatusUpdateToSlack(rec, statusForSlack, finalExtraMessage);
           }
 
-          // 「決定」の時だけ撮影連絡DBへ追加（外部キャストのみ）
-          if (rec.isInternal) {
-          }
-          if ((newStatus === "決定" || newStatus === "OK") && !rec.isInternal) {
+          // 「決定」の時、キャスト（内部含む）を撮影連絡DBへ追加
+          if (newStatus === "決定" || newStatus === "OK") {
             const updaterEmail = currentUser?.email || '';
-
-            // 香盤DBからデータを検索
-            const scheduleKey = `${rec.castId}_${rec.startDate}`;
-            const scheduleInfo = shootingScheduleData.get(scheduleKey) || {};
 
             try {
               const addRes = await fetch("/api/shooting_contact/add", {
@@ -1737,31 +1817,62 @@ ${buildExternalMailBody(rec)}
       }
 
       function buildExternalMailBody(rec) {
-        return `
-◯◯事務所 御中
+        return `お世話になっております、直前のご依頼申し訳ございません。
+以下作品にて、ご出演いただきたく
+${rec.startDate || 'MM/DD'}(曜日)のスケジュールについてお伺いできますでしょうか。
+＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝
+【撮影概要】
+撮影日　：${rec.startDate || 'MM/DD'}(曜日)
+作品名：「${rec.projectName}」
+役柄　：${rec.roleName || ''}役
 
-いつもお世話になっております。
-株式会社GOKKO の ${rec.updatedBy || "担当者"} です。
+クライアント：なし
+競合：なし
 
-以下の内容でキャスティングのご相談がございます。
+投稿先：ごっこ倶楽部tik tokアカウント
+https://www.tiktok.com/@gokko5club
+投稿先：daikaiアカウント
+https://www.tiktok.com/@daikai_55
+投稿先：ウミガメごっこアカウント
+https://www.tiktok.com/@gokko5club.umigame
+投稿先：docomo
+https://www.tiktok.com/@docomo.official
 
-■アカウント
-${rec.accountName}
+※その他ごっこ倶楽部運営の各種SNSなどでも投稿予定。
+https://www.youtube.com/@gokko5club/
+https://x.com/gokko5club
+https://www.instagram.com/gokko5club/
 
-■作品名
-${rec.projectName}
+※docomoさまの各種SNSなどで投稿予定
+https://www.youtube.com/user/docomoOfficial
+その他ごっこ倶楽部運営の各種SNSなどでも投稿予定。
+https://www.youtube.com/@gokko5club/
+https://x.com/gokko5club
+https://www.instagram.com/gokko5club/
 
-■役名／候補キャスト
-${rec.roleName}：${rec.castName}
+投稿アカウント：まいはにTikTokアカウント、および各種SNS予定
+https://www.tiktok.com/@maihani.4
+https://www.youtube.com/channel/UCTStisbrmEM6oIX9Yaq9-NA
+https://www.instagram.com/maihani.4/
 
-■撮影日
-${rec.startDate}${rec.startDate !== rec.endDate ? ` ～ ${rec.endDate}` : ""}
+※作品認知向上のため、
+プレスリリースや各種SNSでの告知発信の可能性もございます。
 
-■備考
-${rec.note || "なし"}
+使用期間：無期限
 
-ご確認のほど、何卒よろしくお願いいたします。
-  `.trim();
+二次使用：予定あり
+・ドラマ素材を活用した各種SNSでの広告配信
+X、Instagram、YouTube
+・今回の施策用のキャンペーンページ(Webサイト)
+二次使用期間は3ヶ月
+
+ご出演料：￥${rec.cost ? Number(rec.cost).toLocaleString() : '18,000'}〜/day
+※出演時間確定次第となりますが上記を想定しております
+＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝
+大変恐れ入りますが、
+取り急ぎスケジュールの有無についてご確認いただけますと幸いです。
+
+何卒よろしくお願い申し上げます。`.trim();
       }
 
       async function updateCalendarEventOnStatusChange(rec, newStatus, rowNumber) {
@@ -2327,11 +2438,20 @@ ${rec.note || "なし"}
       }
 
       function updateCartFromShooting() {
-        // Update global cartMeta or similar if needed?
-        // The user said: "取得できるデータは、カート内のSTEP1で入力していた、アカウント名、NotionIDになります。"
-        // "一旦ここまでできたら、カートの変更を伝えます。"
-        // So for now, I just need to store it in `selectedShooting`.
-        // I will log it for debug.
+        // 選択された撮影情報をメタデータにセット（確認画面や古いフローでの互換性のため）
+        if (selectedShooting) {
+          cartMeta.account = selectedShooting.team;
+          cartMeta.notionUrl = selectedShooting.pageId ? `https://www.notion.so/${selectedShooting.pageId.replace(/-/g, '')}` : '';
+          cartMeta.projectNames[0] = selectedShooting.title;
+
+          // カートプロジェクトがまだ空なら、このタイトルで初期化する
+          if (cartProjects.length === 0) {
+            window.addCartProject();
+            cartProjects[0].title = selectedShooting.title;
+          } else if (cartProjects.length === 1 && !cartProjects[0].title) {
+            cartProjects[0].title = selectedShooting.title;
+          }
+        }
       }
 
       // ========= Cart =========
@@ -3419,24 +3539,25 @@ ${roleName}：${item.cast.name}`;
 
         detailModal.innerHTML = `
           <div class="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto relative flex flex-col md:flex-row">
-             <button onclick="document.getElementById('cast-detail-modal').remove()" class="absolute top-4 right-4 text-gray-500 hover:text-gray-700 z-10">
+             <button onclick="document.getElementById('cast-detail-modal').remove()" class="absolute top-4 right-4 text-gray-500 hover:text-gray-700 z-10 bg-white/50 rounded-full p-1">
                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
              </button>
              
              <!-- Left: Image -->
              <div class="w-full md:w-1/2 bg-gray-100 flex items-center justify-center p-4">
-               ${cast.imageUrl ? `<img src="${formatDriveUrl(cast.imageUrl)}" class="max-w-full max-h-[70vh] object-contain rounded shadow-sm" referrerpolicy="no-referrer">`
+               ${cast.imageUrl ? `<img src="${formatDriveUrl(cast.imageUrl)}" class="max-w-full max-h-[50vh] md:max-h-[70vh] object-contain rounded shadow-sm" referrerpolicy="no-referrer">`
             : `<div class="text-gray-400">No Image</div>`}
              </div>
 
              <!-- Right: Info -->
-             <div class="w-full md:w-1/2 p-8 flex flex-col">
-               <h2 class="text-3xl font-bold mb-2">${cast.name}</h2>
+             <div class="w-full md:w-1/2 p-4 md:p-8 flex flex-col">
+               <h2 class="text-2xl md:text-3xl font-bold mb-2 break-words">${cast.name}</h2>
                <p class="text-lg text-gray-600 mb-4">${cast.agency || 'フリー'}</p>
                
                <div class="flex space-x-4 mb-6">
                  ${snsLinks.join('')}
                </div>
+
 
                <div class="space-y-3 text-sm text-gray-700 mb-8">
                  <div class="flex border-b pb-2">
@@ -3746,8 +3867,8 @@ ${roleName}：${item.cast.name}`;
       window.openShootMailModal = openShootMailModal;
       window.openShootStatusModal = openShootStatusModal;
 
+      {% raw %}
       function openShootMailModal(castingId) {
-
         // Try to find in shootingContactData first, then castingData
         let item = (window.shootingContactData || []).find(i => i.castingId === castingId);
         let isCastingItem = false;
@@ -3758,6 +3879,7 @@ ${roleName}：${item.cast.name}`;
         }
 
         if (!item) { showMessage("データが見つかりません", "error"); return; }
+        console.log(`OpenShootMailModal: ID=${castingId}, Status=${item.status}, Name=${item.castName}`);
 
         const modal = document.getElementById('shoot-mail-modal');
         if (!modal) return;
@@ -3765,44 +3887,234 @@ ${roleName}：${item.cast.name}`;
         // Store current item ID and status for auto-update
         modal.dataset.castingId = castingId;
         modal.dataset.currentStatus = item.status;
-        // Store flag to know if we should update casting status or shooting status
         modal.dataset.isCastingItem = isCastingItem;
 
-        let subject = "";
-        let body = "";
+        // Template builder functions
+        const templates = {};
 
-        // Template Logic
-        if (item.status === "香盤連絡待ち") {
-          subject = `【香盤連絡】${item.projectName}`;
-          body = `${item.castName} 様\n\nお世話になっております。\n株式会社GOKKOです。\n\n${item.projectName} の香盤をお送りいたします。\n\n日時：${item.date} ${item.inTime || '未定'}〜${item.outTime || '未定'}\n場所：${item.location || '未定'}\n\nご確認のほど、よろしくお願いいたします。`;
+        // 0. 打診メール (Order Mail)
+        templates['打診メール'] = {
+          subject: `【ご相談】${item.projectName} / ${item.roleName}役`,
+          body: `お世話になっております、直前のご依頼申し訳ございません。
+以下作品にて、ご出演いただきたく
+{{撮影日}}(曜日)のスケジュールについてお伺いできますでしょうか。
+＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝
+【撮影概要】
+撮影日　：{{撮影日}}(曜日)
+作品名：「{{作品名}}」
+役柄　：{{役名}}役
+
+クライアント：なし
+競合：なし
+
+投稿先：ごっこ倶楽部tik tokアカウント
+https://www.tiktok.com/@gokko5club
+投稿先：daikaiアカウント
+https://www.tiktok.com/@daikai_55
+投稿先：ウミガメごっこアカウント
+https://www.tiktok.com/@gokko5club.umigame
+投稿先：docomo
+https://www.tiktok.com/@docomo.official
+
+※その他ごっこ倶楽部運営の各種SNSなどでも投稿予定。
+https://www.youtube.com/@gokko5club/
+https://x.com/gokko5club
+https://www.instagram.com/gokko5club/
+
+※docomoさまの各種SNSなどで投稿予定
+https://www.youtube.com/user/docomoOfficial
+その他ごっこ倶楽部運営の各種SNSなどでも投稿予定。
+https://www.youtube.com/@gokko5club/
+https://x.com/gokko5club
+https://www.instagram.com/gokko5club/
+
+投稿アカウント：まいはにTikTokアカウント、および各種SNS予定
+https://www.tiktok.com/@maihani.4
+https://www.youtube.com/channel/UCTStisbrmEM6oIX9Yaq9-NA
+https://www.instagram.com/maihani.4/
+
+※作品認知向上のため、
+プレスリリースや各種SNSでの告知発信の可能性もございます。
+
+使用期間：無期限
+
+二次使用：予定あり
+・ドラマ素材を活用した各種SNSでの広告配信
+X、Instagram、YouTube
+・今回の施策用のキャンペーンページ(Webサイト)
+二次使用期間は3ヶ月
+
+ご出演料：￥{{金額}}〜/day
+※出演時間確定次第となりますが上記を想定しております
+＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝
+大変恐れ入りますが、
+取り急ぎスケジュールの有無についてご確認いただけますと幸いです。
+
+何卒よろしくお願い申し上げます。`
+            .replace(/{{撮影日}}/g, item.date || item.startDate || 'MM/DD')
+            .replace(/{{作品名}}/g, item.projectName || '')
+            .replace(/{{役名}}/g, item.roleName || '')
+            .replace(/{{金額}}/g, item.cost ? Number(item.cost).toLocaleString() : '18,000')
+        };
+
+        // 1. 香盤連絡
+        templates['香盤連絡'] = {
+          subject: `【香盤連絡】${item.projectName}`,
+          body: `お世話になっております。お待たせして大変申し訳ございません。
+{{撮影日}}の香盤が確定しましたのでお伝えいたします。
+また今回のご出演料は¥{{金額}}でお願いいたします。
+＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝
+【{{撮影日}}　撮影概要】
+
+▼{{キャスト名}} さま
+{{撮影日}}　{{時間}}
+作品名：「{{作品名1}}」　{{配役1}}役
+　　　　「{{作品名2}}」　{{配役2}}役
+　　　　「{{作品名3}}」　{{配役3}}役
+
+集合場所：{{集合場所}}
+{{住所}}
+{{マップ}}
+
+ご持参いただきたい衣装：
+{{衣装内容}}
+
+詳細については以下をご確認くださいませ。
+{{notion}}
+
+当日の緊急連絡先
+{{連絡先}}
+＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝
+何卒よろしくお願いいたします。`
+            .replace(/{{撮影日}}/g, item.date || item.startDate || 'MM/DD')
+            .replace(/{{キャスト名}}/g, item.castName)
+            .replace(/{{時間}}/g, (item.inTime && item.outTime) ? `${item.inTime}〜${item.outTime}` : '時間未定')
+            .replace(/{{金額}}/g, item.cost ? Number(item.cost).toLocaleString() : '金額')
+            .replace(/{{作品名1}}/g, item.projectName || '')
+            .replace(/{{配役1}}/g, item.roleName || '')
+            .replace(/{{作品名[23]}}/g, '（作品名）')
+            .replace(/{{配役[23]}}/g, '（役名）')
+            .replace(/{{集合場所}}/g, item.location || '（集合場所）')
+            .replace(/{{住所}}/g, '（住所）')
+            .replace(/{{マップ}}/g, '（マップURL）')
+            .replace(/{{衣装内容}}/g, '（衣装詳細）')
+            .replace(/{{notion}}/g, item.notionId ? `https://www.notion.so/${item.notionId.replace(/-/g, '')}` : '(Notion URL)')
+            .replace(/{{連絡先}}/g, '090-xxxx-xxxx (担当者)')
+        };
+
+        // 2. 発注書 (PDFありをデフォルト)
+        templates['発注書'] = {
+          subject: `【発注書送付】${item.projectName}`,
+          body: `この度は作品へのご参加ありがとうございます。
+添付PDFにて発注内容をお伝えいたしますので、ご確認いただきご請求ください。
+恐れ入りますが、翌月の3営業日以内迄に、ご請求書をお送りくださいませ。
+なお、ご出演料のご請求書発行方法について以下ページにおまとめしております。
+※同月中のご出演分であれば、他作品出演分の請求書とまとめての送付でも問題ございません。
+請求書送付先：cast-invoice@gokkoclub.jp
+【締め支払い日及び請求書発行について】
+https://brass-soursop-b4a.notion.site/4f37617875b8400d93a444956ab54fa6
+引き続き、何卒よろしくお願いいたします。`
+        };
+
+        // 3. オフショット (案件/非案件)
+        templates['オフショット_案件'] = {
+          subject: `【オフショット共有】${item.projectName}`,
+          body: `案件撮影
+お世話になっております。
+先日{{キャスト名}}さまにご参加いただいた撮影の写真の共有でございます。
+NGチェックの意味も含め、Googleドライブにて共有させていただきます。
+・作品名『{{作品名1}}』　※{{撮影日}}撮影
+{{GドライブURL}}
+※編集権限を付与しておりますので、NGはご自由に削除いただけます。
+※こちらの写真は2025//()●:00までにNG対応お願いいたします。
+※作品投稿後にご活用いただけます。
+よろしくお願いいたします。`
+            .replace(/{{キャスト名}}/g, item.castName)
+            .replace(/{{作品名1}}/g, item.projectName || '')
+            .replace(/{{撮影日}}/g, item.date || item.startDate || 'MM/DD')
+            .replace(/{{GドライブURL}}/g, '(Goole Drive URL)')
+        };
+        templates['オフショット_非案件'] = {
+          subject: `【オフショット共有】${item.projectName}`,
+          body: `お世話になっております。
+先日{{キャスト名}}さまにご参加いただいた撮影の写真の共有でございます。
+NGチェックの意味も含め、Googleドライブにて共有させていただきます。
+
+・作品名『{{作品名1}}』　※{{撮影日}}撮影
+{{GドライブURL}}
+※編集権限を付与しておりますので、NGはご自由に削除いただけます。
+※こちらの写真は2025//()●:00以降自由にご利用ください。
+（全体共有いたしますので、それまでにNG対応お願いいたします。）
+
+よろしくお願いいたします。`
+            .replace(/{{キャスト名}}/g, item.castName)
+            .replace(/{{作品名1}}/g, item.projectName || '')
+            .replace(/{{撮影日}}/g, item.date || item.startDate || 'MM/DD')
+            .replace(/{{GドライブURL}}/g, '(Goole Drive URL)')
+        };
+
+        // 4. 投稿日連絡
+        templates['投稿日連絡'] = {
+          subject: `【投稿日連絡】${item.projectName}`,
+          body: `お世話になっております。
+先日{{キャスト名}} さまにご参加いただいた作品の投稿スケジュールの共有でございます。
+
+作品名　：『{{作品名1}}』
+投稿日　：2025//()
+アカウント：{{アカウント}}
+
+【TikTok閲覧・シェア時の注意点】
+作品出演の告知をいただく際、
+TikTokのリンク共有はアルゴリズムでマイナスに働いてしまいます。
+告知いただく際は、以下いずれかでご対応くださいませ。
+① 投稿当日に告知を行う場合
+・URLは記載せず、画像とテキストのみで投稿をお願いします。
+・文言例：「ドラマ『●●●●』が、ごっこ倶楽部のTikTokアカウントで投稿されたので、ぜひご覧ください！」
+
+② 投稿翌日以降に告知を行う場合
+・URLは記載せず、画像とテキストのみで投稿をお願いします。
+・「動画リンク」ではなく、「アカウントのリンク」を記載する形でご投稿ください。
+
+詳細については、以下リンク先をご確認ください。
+※一部関係者のみ閲覧可能な限定公開資料となっております。SNSや社外への転載・拡散はご遠慮ください
+https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
+
+よろしくお願いいたします。`
+            .replace(/{{キャスト名}}/g, item.castName)
+            .replace(/{{作品名1}}/g, item.projectName || '')
+            .replace(/{{アカウント}}/g, item.account || '（アカウント名）')
+        };
+        templates['デフォルト'] = {
+          subject: `【連絡】${item.projectName}`,
+          body: `${item.castName} 様\n\nお世話になっております。\n株式会社GOKKOです。\n\n（本文）\n\nよろしくお願いいたします。`
+        };
+
+
+        // Available options
+        const allOptions = ['打診メール', '香盤連絡', '発注書', 'オフショット_案件', 'オフショット_非案件', '投稿日連絡'];
+        let initialKey = 'デフォルト';
+
+        // default selection logic
+        if (item.status === "香盤連絡待ち" || item.status === "決定" || item.status === "OK") {
+          initialKey = '香盤連絡';
         } else if (item.status === "発注書送信待ち") {
-          // ★追加: 発注書送付用のメールテンプレート
-          subject = `【発注書送付】${item.projectName}`;
-          body = `${item.castName} 様\n\nお世話になっております。\n株式会社GOKKOです。\n\n${item.projectName} の発注書をお送りいたします。\n添付ファイルをご確認のほど、よろしくお願いいたします。\n\n引き続きよろしくお願いいたします。`;
+          initialKey = '発注書';
         } else if (item.status === "メイキング共有待ち") {
-          subject = `【メイキング共有】${item.projectName}`;
-          body = `${item.castName} 様\n\nお世話になっております。\n株式会社GOKKOです。\n\n${item.projectName} のメイキング映像が完成いたしました。\n以下のURLよりご確認いただけます。\n\n${item.makingUrl || '(URL)'}\n\nご確認のほど、よろしくお願いいたします。`;
+          initialKey = 'オフショット_案件';
         } else if (item.status === "投稿日連絡待ち") {
-          subject = `【投稿日連絡】${item.projectName}`;
-          body = `${item.castName} 様\n\nお世話になっております。\n株式会社GOKKOです。\n\n${item.projectName} の投稿日が決定いたしました。\n\n投稿日：${item.postDate || '(日付)'}\n\nご確認のほど、よろしくお願いいたします。`;
-        } else {
-          // Default
-          subject = `【連絡】${item.projectName}`;
-          body = `${item.castName} 様\n\nお世話になっております。\n株式会社GOKKOです。\n\n（本文）\n\nよろしくお願いいたします。`;
+          initialKey = '投稿日連絡';
+        } else if (item.status === "オーダー待ち" || item.status === "打診中" || item.status === "仮キャスティング" || item.status === "条件つきOK") {
+          initialKey = '打診メール';
         }
 
-        // Find email from castingData (Column U) - redundant if item is from castingData but safe
         const originalRec = castingData.find(c => c.castingId === castingId);
-        // ★修正: キャストDBからも検索してフォールバック
         const castInfo = castData.find(c => c.castId === (originalRec?.castId || item.castId));
         const castEmail = originalRec?.email || item.email || castInfo?.email || "";
 
         modal.innerHTML = `
-        <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full p-6">
-            <div class="flex justify-between items-center mb-4">
-                <h3 class="text-xl font-bold">メール作成</h3>
-                <button class="text-gray-500 hover:text-gray-700" onclick="document.getElementById('shoot-mail-modal').classList.add('hidden')">&times;</button>
-            </div>
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-lg mx-4 p-6 relative">
+            <h3 class="text-xl font-bold mb-4">メール作成 (ステータス: ${item.status})</h3>
+            <button class="absolute top-4 right-4 text-gray-500 hover:text-gray-700 text-2xl z-10" onclick="document.getElementById('shoot-mail-modal').classList.add('hidden')">&times;</button>
             <div class="space-y-4">
                 <div>
                     <label class="block text-sm font-medium text-gray-700">送信先 (To)</label>
@@ -3812,12 +4124,19 @@ ${roleName}：${item.cast.name}`;
                     </div>
                 </div>
                 <div>
+                   <label class="block text-sm font-medium text-gray-700">テンプレート切替</label>
+                   <select id="mail-template-select" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 bg-white">
+                      ${allOptions.map(opt => `<option value="${opt}" ${opt === initialKey ? 'selected' : ''}>${opt}</option>`).join('')}
+                      <option value="デフォルト" ${initialKey === 'デフォルト' ? 'selected' : ''}>デフォルト (空)</option>
+                   </select>
+                </div>
+                <div>
                     <label class="block text-sm font-medium text-gray-700">件名</label>
-                    <input type="text" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2" value="${subject}">
+                    <input type="text" id="mail-subject" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2" value="${templates[initialKey]?.subject || ''}">
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700">本文</label>
-                    <textarea class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 h-64">${body}</textarea>
+                    <textarea id="mail-body" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 h-96 font-mono whitespace-pre-wrap">${templates[initialKey]?.body || ''}</textarea>
                 </div>
             </div>
             <div class="mt-6 flex justify-end space-x-3">
@@ -3827,6 +4146,17 @@ ${roleName}：${item.cast.name}`;
         </div>
       `;
         modal.classList.remove('hidden');
+
+        // Add Listener for Select Change
+        const select = document.getElementById('mail-template-select');
+        select.addEventListener('change', (e) => {
+          const val = e.target.value;
+          const tmpl = templates[val];
+          if (tmpl) {
+            document.getElementById('mail-subject').value = tmpl.subject;
+            document.getElementById('mail-body').value = tmpl.body;
+          }
+        });
       };
 
       window.copyToClipboardAndClose = async function () {
@@ -3872,6 +4202,7 @@ ${roleName}：${item.cast.name}`;
 
         modal.classList.add('hidden');
       };
+      {% endraw %}
 
       function openShootStatusModal(castingId, currentStatus) {
         // Legacy manual update if needed, but "Copy" is now the primary driver.
@@ -3910,18 +4241,13 @@ ${roleName}：${item.cast.name}`;
       // Generic Update Function for Shooting Contact Fields
       window.updateShootingContactFields = async function (id, fields) {
         try {
-          // Calculate cost if IN/OUT changed (Simple logic: just log for now, or implement if rate is known)
-          // For now just save the fields
-
           const payload = {
-            id: id,
+            castingId: id, // API expects 'castingId', not just 'id' depending on backend, but let's match saveShootingRow
             ...fields
           };
 
-          // If cost is not manually set but IN/OUT are, we could try to auto-calc here
-          // But we don't have hourly rate. So we skip auto-calc for now.
-
-          const res = await fetch("/api/shooting_contact/status", { // Reusing status endpoint or create new?
+          // ★修正: 正しいAPIエンドポイント (/update) を使用する
+          const res = await fetch("/api/shooting_contact/update", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload)
@@ -3930,12 +4256,13 @@ ${roleName}：${item.cast.name}`;
           if (!res.ok) {
             throw new Error("Update failed");
           }
-          // Optional: Show toast
+          // Success (optional toast)
         } catch (e) {
           console.error(e);
           showMessage("更新に失敗しました", "error");
         }
       };
+
 
       // Sync Function (GAS Trigger)
       window.syncShootingSchedule = async function (btn, syncType = 'schedule') {
@@ -4064,8 +4391,9 @@ ${roleName}：${item.cast.name}`;
         }
 
         modal.innerHTML = `
-      <div class="bg-white rounded-lg shadow-xl max-w-lg w-full p-6">
+      <div class="bg-white rounded-lg shadow-xl w-full max-w-lg mx-4 p-6 relative">
         <h3 class="text-xl font-bold mb-4">最終確認</h3>
+        <button class="absolute top-4 right-4 text-gray-500 hover:text-gray-700" onclick="closeConfirmationModal()">&times;</button>
         <p class="text-sm text-gray-600 mb-4">作品名：<span class="font-bold text-black">${mainProjectName}</span> 他</p>
         
         <div class="space-y-4">
@@ -4170,8 +4498,18 @@ ${roleName}：${item.cast.name}`;
 
       // モーダルから呼ばれるラッパー関数
       async function processNewOrderFromModal(options) {
-        const teamName = selectedShooting ? selectedShooting.team : (currentUser?.name || '不明');
-        const pageId = selectedShooting ? selectedShooting.pageId : '';
+        // ★修正: selectedShooting がない場合は additionalOrderContext を参照
+        let teamName = (currentUser?.name || '不明');
+        let pageId = '';
+
+        if (selectedShooting) {
+          teamName = selectedShooting.team;
+          pageId = selectedShooting.pageId;
+        } else if (isAdditionalOrderMode && additionalOrderContext) {
+          teamName = additionalOrderContext.accountName;
+          pageId = additionalOrderContext.projectId; // Notion Page ID
+        }
+
         const notionUrl = pageId ? `https://www.notion.so/${pageId.replace(/-/g, '')}` : '';
 
         // CC設定
@@ -4508,24 +4846,23 @@ ${roleName}：${item.cast.name}`;
       }
 
       function renderNewCartModal(modal) {
-        const teamName = selectedShooting ? selectedShooting.team : (currentUser?.name || '不明');
-        const pageId = selectedShooting ? selectedShooting.pageId : '未選択';
+        let teamName = (currentUser?.name || '不明');
+        let pageId = '未選択';
 
-        // Cast Pool (only those in cart but not assigned to any role yet?)
-        // Or just list all in cart and allow dragging?
-        // User said: "カートに追加したキャストの名前が下に...並んでいる想定"
-        // Let's list all casts in `cart`.
-        // If assigned, maybe dim them or remove them?
-        // "追加した人は削除も可能" implies we move them.
-        // Let's assume "Pool" contains unassigned casts.
+        if (selectedShooting) {
+          teamName = selectedShooting.team;
+          pageId = selectedShooting.pageId;
+        } else if (isAdditionalOrderMode && additionalOrderContext) {
+          teamName = additionalOrderContext.accountName;
+          pageId = additionalOrderContext.projectId || '既存案件';
+        }
 
-        // Cast Pool: Show ALL casts in cart (User request: "消えないようにして欲しい")
+        // Cast Pool: Show ALL casts in cart
         const allCartCastIds = Object.keys(cart);
-        const poolCastIds = allCartCastIds; // No filtering
+        const poolCastIds = allCartCastIds;
 
         modal.innerHTML = `
           <div class="bg-white rounded-lg shadow-xl w-full max-w-6xl h-[90vh] flex flex-col">
-            <!-- Header -->
             <div class="flex items-center justify-between p-4 border-b bg-gray-50">
               <div>
                 <div class="text-sm text-gray-500">アカウント名: <span class="font-bold text-gray-800">${teamName}</span></div>
@@ -4536,24 +4873,26 @@ ${roleName}：${item.cast.name}`;
               </button>
             </div>
 
-            <!-- Body -->
             <div class="flex-grow flex overflow-hidden">
-              <!-- Left: Cast Pool -->
               <div class="w-1/4 border-r bg-gray-50 flex flex-col">
                 <div class="p-3 font-bold text-gray-700 border-b">キャストプール</div>
+                
                 <div id="cart-cast-pool" class="flex-grow overflow-y-auto p-2 space-y-2">
                   ${poolCastIds.map(cid => renderDraggableCast(cid)).join('')}
                   ${poolCastIds.length === 0 ? '<div class="text-xs text-gray-400 text-center mt-4">キャストがいません</div>' : ''}
                 </div>
+
+                <div class="p-3 border-t bg-gray-100">
+                   <label class="text-xs font-bold text-gray-600 block mb-1">PDF添付 (任意):</label>
+                   <input type="file" id="order-pdf-file" accept="application/pdf" multiple class="w-full text-xs text-gray-600 file:mr-2 file:py-1 file:px-2 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+                </div>
               </div>
 
-              <!-- Right: Projects -->
               <div class="w-3/4 flex flex-col bg-white">
                 <div id="cart-projects-container" class="flex-grow overflow-y-auto p-4 space-y-6">
                   ${cartProjects.map(p => renderCartProject(p)).join('')}
                 </div>
                 
-                <!-- Add Project Button -->
                 <div class="p-4 border-t bg-gray-50 flex justify-center">
                   <button onclick="addCartProject()" class="flex items-center gap-2 text-blue-600 hover:text-blue-800 font-semibold">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
@@ -4563,12 +4902,7 @@ ${roleName}：${item.cast.name}`;
               </div>
             </div>
 
-            <!-- Footer -->
-            <div class="p-4 border-t bg-white flex justify-between items-center">
-              <div class="flex items-center gap-2">
-                 <label class="text-sm font-bold text-gray-600">PDF添付:</label>
-                 <input type="file" id="order-pdf-file" accept="application/pdf" multiple class="text-sm text-gray-600 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
-              </div>
+            <div class="p-4 border-t bg-white flex justify-end items-center">
               <div class="flex gap-3">
                 <button onclick="closeCartModal()" class="px-4 py-2 rounded-md border border-gray-300">閉じる</button>
                 <button onclick="submitNewOrder()" class="px-6 py-2 rounded-md bg-blue-600 text-white font-bold shadow hover:bg-blue-700">
@@ -4602,21 +4936,46 @@ ${roleName}：${item.cast.name}`;
       window.removeCastFromCart = function (castId) {
         if (cart[castId]) {
           delete cart[castId];
+
+          // ★追加修正: cartProjects (右側の作品・役リスト) からもこのキャストIDを除去する
+          if (cartProjects && cartProjects.length > 0) {
+            cartProjects.forEach(proj => {
+              if (proj.roles) {
+                proj.roles.forEach(role => {
+                  if (role.castIds) {
+                    role.castIds = role.castIds.filter(id => id !== castId);
+                  }
+                });
+              }
+            });
+          }
+
           updateCartCount();
-          renderCartModal(); // Re-render modal to update pool
+          renderCartModal(); // 再描画してプールと配置を更新
+          displayAvailableCasts();
         }
       };
 
       function renderCartProject(project) {
+        // ★修正: 作品数が1つしかない場合は削除ボタンを表示しない（または無効化）
+        const canDelete = cartProjects.length > 1;
+
+        const deleteButtonHtml = canDelete
+          ? `<button onclick="removeCartProject('${project.id}')" class="text-red-400 hover:text-red-600 p-1" title="作品を削除">
+               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+             </button>`
+          : `<button class="text-gray-300 p-1 cursor-not-allowed" title="これ以上削除できません" disabled>
+               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+             </button>`;
+
         return `
           <div class="border rounded-lg p-4 bg-gray-50 relative group" data-project-id="${project.id}">
             <div class="mb-3 flex items-center gap-2">
               <label class="text-sm font-bold text-gray-600 w-16">作品名</label>
               <input type="text" class="flex-grow border rounded px-2 py-1 text-sm font-bold" 
                      value="${project.title}" onchange="updateProjectTitle('${project.id}', this.value)" placeholder="作品名を入力">
-              <button onclick="removeCartProject('${project.id}')" class="text-red-400 hover:text-red-600 p-1" title="作品を削除">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-              </button>
+              
+              ${deleteButtonHtml}
             </div>
 
             <div class="space-y-3 pl-4 border-l-2 border-gray-200">
@@ -4674,9 +5033,7 @@ ${roleName}：${item.cast.name}`;
               `).join('')}
               <div class="text-xs text-gray-400 italic flex-shrink-0">ここへドラッグ</div>
             </div>
-</content>
-      </div>
-    `;
+`;
       }
 
       // --- State Updaters ---
@@ -4709,6 +5066,12 @@ ${roleName}：${item.cast.name}`;
         }
       }
       window.removeCartProject = function (pid) {
+        // ★修正: 作品数が1つ以下の場合は削除させない
+        if (cartProjects.length <= 1) {
+          showMessage('作品はこれ以上削除できません。', 'error');
+          return;
+        }
+
         cartProjects = cartProjects.filter(p => p.id !== pid);
         renderCartModal();
       };
@@ -4800,7 +5163,7 @@ ${roleName}：${item.cast.name}`;
         if (!modal) return;
 
         modal.innerHTML = `
-          < div class="bg-white rounded-lg shadow-xl max-w-md w-full p-5" >
+          <div class="bg-white rounded-lg shadow-xl max-w-md w-full p-5">
         <div class="flex items-center justify-between mb-3">
           <h3 class="text-lg font-bold">新規外部キャストを追加</h3>
           <button id="new-cast-close" class="text-gray-600 hover:text-gray-800">&times;</button>
@@ -4835,7 +5198,7 @@ ${roleName}：${item.cast.name}`;
           <button id="new-cast-cancel" class="px-4 py-2 rounded-md border border-gray-300">キャンセル</button>
           <button id="new-cast-save" class="px-4 py-2 rounded-md bg-blue-600 text-white font-semibold">保存</button>
         </div>
-      </div > `;
+      </div>`;
 
         modal.classList.remove('hidden');
 
@@ -4920,45 +5283,45 @@ ${roleName}：${item.cast.name}`;
       // ========= Cart Step1 / Step2 =========
       function renderCartStep1(modal) {
         modal.innerHTML = `
-          < div class="bg-white rounded-lg shadow-xl max-w-lg w-full p-6" >
-        <div class="flex items-center justify-between mb-4">
-          <h3 class="text-xl font-bold">STEP1：オーダー情報の入力</h3>
-          <button id="cart-step1-close" class="text-gray-500 hover:text-gray-700">
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-          </button>
-        </div>
-        <div class="mb-4">
-          <label class="block text-sm font-medium text-gray-700 mb-1">アカウント名（必須）</label>
-          <input type="text" id="cart-account" class="w-full border rounded px-3 py-2" placeholder="アカウント名" value="${cartMeta.account || ''}">
-        </div>
-        <div class="grid grid-cols-1 gap-3 mb-4">
-          <div>
-            <label class="text-sm font-medium text-gray-700 mb-1">作品名1（必須）</label>
-            <input type="text" id="cart-project-1" class="w-full border rounded px-3 py-2" placeholder="作品名1" value="${cartMeta.projectNames?.[0] || ''}">
+          <div class="bg-white rounded-lg shadow-xl w-full max-w-lg mx-4 p-6 relative">
+            <div class="flex items-center justify-between mb-4">
+              <h3 class="text-xl font-bold">STEP1：オーダー情報の入力</h3>
+              <button id="cart-step1-close" class="absolute top-4 right-4 text-gray-500 hover:text-gray-700">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+              </button>
+            </div>
+            <div class="mb-4">
+              <label class="block text-sm font-medium text-gray-700 mb-1">アカウント名（必須）</label>
+              <input type="text" id="cart-account" class="w-full border rounded px-3 py-2" placeholder="アカウント名" value="${cartMeta.account || ''}">
+            </div>
+            <div class="grid grid-cols-1 gap-3 mb-4">
+              <div>
+                <label class="text-sm font-medium text-gray-700 mb-1">作品名1（必須）</label>
+                <input type="text" id="cart-project-1" class="w-full border rounded px-3 py-2" placeholder="作品名1" value="${cartMeta.projectNames?.[0] || ''}">
+              </div>
+              <div>
+                <label class="text-sm font-medium text-gray-700 mb-1">作品名2（任意）</label>
+                <input type="text" id="cart-project-2" class="w-full border rounded px-3 py-2" placeholder="作品名2" value="${cartMeta.projectNames?.[1] || ''}">
+              </div>
+              <div>
+                <label class="text-sm font-medium text-gray-700 mb-1">作品名3（任意）</label>
+                <input type="text" id="cart-project-3" class="w-full border rounded px-3 py-2" placeholder="作品名3" value="${cartMeta.projectNames?.[2] || ''}">
+              </div>
+              <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-700 mb-1">Notion URL (任意)</label>
+                <input type="text" id="cart-notion" class="w-full border rounded px-3 py-2" placeholder="https://www.notion.so/..." value="${cartMeta.notionUrl || ''}">
+              </div>
+              <div class="mb-6">
+                <label class="block text-sm font-medium text-gray-700 mb-1">PDFファイル添付 (任意)</label>
+                <input type="file" id="cart-pdf-file" accept="application/pdf" multiple class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+                <p class="text-xs text-gray-500 mt-1">※Slack通知のスレッドにアップロードされます。</p>
+              </div>
+              <div class="flex justify-end">
+                <button id="cart-step1-next" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">次へ</button>
+              </div>
+            </div>
           </div>
-          <div>
-            <label class="text-sm font-medium text-gray-700 mb-1">作品名2（任意）</label>
-            <input type="text" id="cart-project-2" class="w-full border rounded px-3 py-2" placeholder="作品名2" value="${cartMeta.projectNames?.[1] || ''}">
-          </div>
-          <div>
-            <label class="text-sm font-medium text-gray-700 mb-1">作品名3（任意）</label>
-            <input type="text" id="cart-project-3" class="w-full border rounded px-3 py-2" placeholder="作品名3" value="${cartMeta.projectNames?.[2] || ''}">
-          </div>
-          <div class="mb-4">
-            <label class="block text-sm font-medium text-gray-700 mb-1">Notion URL (任意)</label>
-            <input type="text" id="cart-notion" class="w-full border rounded px-3 py-2" placeholder="https://www.notion.so/..." value="${cartMeta.notionUrl || ''}">
-          </div>
-          <div class="mb-6">
-            <label class="block text-sm font-medium text-gray-700 mb-1">PDFファイル添付 (任意)</label>
-            <input type="file" id="cart-pdf-file" accept="application/pdf" multiple class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
-            <p class="text-xs text-gray-500 mt-1">※Slack通知のスレッドにアップロードされます。</p>
-          </div>
-          <div class="flex justify-end">
-            <button id="cart-step1-next" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">次へ</button>
-          </div>
-        </div>
-      </div >
-          `;
+        `;
         modal.classList.remove('hidden');
 
         // Restore file input if exists in memory (Note: file input value cannot be set programmatically for security, so we just keep the object in cartMeta)
@@ -5024,9 +5387,10 @@ ${roleName}：${item.cast.name}`;
           .join('');
 
         modal.innerHTML = `
-      <div class="bg-white rounded-lg shadow-xl max-w-4xl w-full p-6">
-        <h3 class="text-xl font-bold mb-4">STEP2：キャスト情報の紐付け</h3>
-        <div class="max-h-[70vh] overflow-y-auto">
+          <div class="bg-white rounded-lg shadow-xl w-full max-w-lg mx-4 p-6 relative">
+             <h3 class="text-xl font-bold mb-4">STEP2：キャスト情報の紐付け</h3>
+             <button class="absolute top-4 right-4 text-gray-500 hover:text-gray-700" onclick="closeCartModal()">&times;</button>
+             <div class="space-y-4 max-h-[60vh] overflow-y-auto p-2">
           <table class="min-w-full text-sm">
             <thead>
               <tr class="bg-gray-100">
