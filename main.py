@@ -547,7 +547,7 @@ async def notify_special_order(payload: SpecialOrderPayload):
                 )
                 ts = resp.get("ts")
                 if ts:
-                    perm = await slack_client.chat_getPermalink(channel=SLACK_DEFAULT_CHANNEL, message_ts=ts)
+                    perm = await slack_client.chat_getPermalink(channel=target_channel, message_ts=ts)
                     permalink = perm.get("permalink", "")
             except Exception as e:
                 print(f"Slack error: {e}")
