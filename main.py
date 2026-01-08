@@ -71,7 +71,8 @@ class OrderItem(BaseModel):
     note: str = ""
     projectName: str
     slack_user_id: Optional[str] = None
-    conflictInfo: Optional[str] = None 
+    conflictInfo: Optional[str] = None
+    isInternal: bool = False 
 
 class OrderCreatedPayload(BaseModel):
     accountName: str
@@ -168,12 +169,20 @@ def build_order_text(payload: OrderCreatedPayload, upload_error: str = None) -> 
 
     lines.append("キャスティングオーダーがありました。")
     
+    # Check if any order is internal
+    has_internal = any(o.isInternal for o in payload.orders)
+
+    if not payload.isAdditionalOrder and has_internal:
+        lines.append("*内部キャストはスタンプで反応ください*")
+
     if payload.isAdditionalOrder:
         lines = []
         if SLACK_MENTION_GROUP_ID:
             lines.append(f"<!subteam^{SLACK_MENTION_GROUP_ID}>")
         
         lines.append("追加オーダーのお知らせ")
+        if has_internal:
+            lines.append("*内部キャストはスタンプで反応ください*")
         lines.append("")
 
         projects = {}
@@ -189,8 +198,17 @@ def build_order_text(payload: OrderCreatedPayload, upload_error: str = None) -> 
         for p_name in project_ordered:
             lines.append(f"【{p_name}】")
             for r_name, cands in projects[p_name].items():
-                cast_names = " / ".join([c.castName for c in cands])
+                # Fix: Use mentions if available
+                cast_disp_list = []
+                for c in cands:
+                    if c.slack_user_id:
+                        cast_disp_list.append(f"<@{c.slack_user_id}>")
+                    else:
+                        cast_disp_list.append(c.castName)
+                
+                cast_names = " / ".join(cast_disp_list)
                 lines.append(f"{r_name}：{cast_names}")
+                
                 for c in cands:
                     if c.conflictInfo:
                         lines.append(f"  🚨 {c.conflictInfo}")
@@ -249,7 +267,7 @@ def build_order_text(payload: OrderCreatedPayload, upload_error: str = None) -> 
         lines.append(f"https://www.notion.so/{payload.projectId.replace('-', '')}")
     else:
         lines.append("未設定")
-        
+
     lines.append("\n--------------------------------------------------")
     return "\n".join(lines).rstrip()
 
