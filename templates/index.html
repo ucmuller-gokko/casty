@@ -640,7 +640,13 @@
           // Casts (No change needed here, reusing existing logic below)
           const castValues = vr[0].values || [];
           castData = castValues
-            .filter(r => r && (r[1]?.trim() || r[0]?.trim()))
+            .filter(r => {
+              if (!r) return false;
+              const id = r[0]?.trim() || '';
+              // "削除済み" が含まれるIDは除外
+              if (id.includes('削除ずみ')) return false;
+              return r[1]?.trim() || id;
+            })
             .map((row, idx) => {
               const id = row[0]?.trim() || `cast_${idx + 1}`;
               const name = row[1]?.trim() || `未登録キャスト${idx + 1}`;
@@ -813,7 +819,7 @@
       async function fetchCastingDataFromSheet() {
         const getRes = await gapi.client.sheets.spreadsheets.values.get({
           spreadsheetId: SPREADSHEET_ID,
-          range: 'キャスティングリスト!A2:W' // A-W列まで取得 (U:Email, V:Cost, W:Structure)
+          range: 'キャスティングリスト!A2:X' // A-X列まで取得
         });
         const rows = getRes.result.values || [];
 
@@ -879,6 +885,7 @@
             email: row?.[20] || '',           // U列: Email
             cost: row?.[21] || '',            // V列: Cost
             structureData: structureData,     // W列: Structure
+            dbSentStatus: row?.[23] || '',    // X列: 撮影連絡DB送信ステータス (済/未)
             isInternal,
           };
         });
@@ -1505,7 +1512,7 @@
           // 行番号取得
           const getRes = await gapi.client.sheets.spreadsheets.values.get({
             spreadsheetId: SPREADSHEET_ID,
-            range: 'キャスティングリスト!A2:R'
+            range: 'キャスティングリスト!A2:X' // X列まで取得
           });
           const rows = getRes.result.values || [];
           let rowIdx = -1;
@@ -1568,38 +1575,67 @@
           }
 
           // 「決定」の時、キャスト（内部含む）を撮影連絡DBへ追加
-          if (newStatus === "決定" || newStatus === "OK") {
-            const updaterEmail = currentUser?.email || '';
+          // リクエスト変更:
+          // 1. 内部キャスト: OKになったらDBに登録。ただし重複防止のためX列(dbSentStatus)をチェック。
+          // 2. 外部キャスト: OKになってもDBに登録しない（オフショット共有完了後などの別タイミング）。
 
-            try {
-              const addRes = await fetch("/api/shooting_contact/add", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  castingId: rec.castingId,
-                  account: rec.accountName,
-                  projectName: rec.projectName,
-                  notionId: rec.projectId, // Use original Project ID (Notion Page ID)
-                  roleName: rec.roleName,
-                  castName: rec.castName,
-                  castType: rec.isInternal ? "内部" : "外部",
-                  shootDate: rec.startDate,
-                  note: rec.note || "",
-                  updatedBy: updaterEmail,
-                  updatedAt: new Date().toISOString(),
-                  mainSub: rec.mainSub || "その他",
-                  cost: rec.cost || "" // ★追加: 金額
-                })
-              });
-              if (!addRes.ok) {
-                console.error("Failed to add to shooting contact DB", await addRes.text());
+          if (isFinal && (newStatus === "決定" || newStatus === "OK")) {
+            // --- 外部キャストの場合 ---
+            // リクエスト修正: 外部キャストは「OK/決定」で撮影連絡DBに保存する（重複防止あり）
+            if (!isInternalCast) {
+              // X列 (dbSentStatus) が "済" でなければ保存
+              if (rec.dbSentStatus !== "済") {
+                const updaterEmail = currentUser?.email || '';
+                try {
+                  // 1. DB追加
+                  const addRes = await fetch("/api/shooting_contact/add", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      castingId: rec.castingId,
+                      account: rec.accountName,
+                      projectName: rec.projectName,
+                      notionId: rec.projectId,
+                      roleName: rec.roleName,
+                      castName: rec.castName,
+                      castType: "外部",
+                      shootDate: rec.startDate,
+                      note: rec.note || "",
+                      updatedBy: updaterEmail,
+                      updatedAt: new Date().toISOString(),
+                      mainSub: rec.mainSub || "その他",
+                      cost: rec.cost || ""
+                    })
+                  });
+
+                  if (addRes.ok) {
+                    // 2. X列を "済" に更新
+                    // X列は Index 23 -> 'X'
+                    await gapi.client.sheets.spreadsheets.values.update({
+                      spreadsheetId: SPREADSHEET_ID,
+                      range: `キャスティングリスト!X${targetRow}`,
+                      valueInputOption: 'USER_ENTERED',
+                      resource: { values: [["済"]] }
+                    });
+                    rec.dbSentStatus = "済"; // ローカル更新
+                    console.log("External Cast saved to DB and marked as sent.");
+                  } else {
+                    console.error("Failed to add external cast to DB", await addRes.text());
+                    showMessage("撮影連絡DBへの保存に失敗しました(API Error)", "error");
+                  }
+                } catch (err) {
+                  console.error("Exception calling shooting_contact/add", err);
+                  showMessage("撮影連絡DBへの保存に失敗しました", "error");
+                }
               } else {
+                console.log("External Cast already saved (dbSentStatus=済). Skipping.");
               }
-            } catch (err) {
-              console.error("Exception calling shooting_contact/add", err);
+            } else {
+              // --- 内部キャストの場合 ---
+              // 撮影連絡DBには保存しない
+              console.log("Internal Cast: Skipping auto-save to Shooting DB on OK status as per request.");
             }
           }
-
           showMessage('ステータスを更新しました。');
           await renderCastingStatusView(false);
           displayAvailableCasts();
@@ -2136,7 +2172,6 @@ X、Instagram、YouTube
           // changeCastingStatus needs to support cost update.
           // Currently it calls /api/notify/status_update AND updates sheet.
           // But changeCastingStatus implementation (lines 1200+) might not handle Cost update to sheet.
-          // Let's check changeCastingStatus.
           // If it doesn't, we might need to call saveEdit logic or update changeCastingStatus.
           // For now, let's pass cost to changeCastingStatus and ensure it handles it.
           await changeCastingStatus(rec.castingId, newStatus, {
@@ -2695,11 +2730,11 @@ X、Instagram、YouTube
               roleName: it.roleName || '',
               castName: it.cast.name,
               rank: it.rank,
-              mainSub: it.mainSub,
               note: it.note || '',
-              projectName: workTitle,
-              slack_user_id: slackMentionId || null,
-              conflictInfo: conflictMsg // ★追加
+              projectName: workTitle, // ここでプロジェクト名を渡す
+              slack_user_id: slackMentionId || null, // ★メンション用ID
+              conflictInfo: conflictMsg,
+              isInternal: it.cast.isInternal // ★Internalフラグ
             });
 
             for (const rg of ranges) {
@@ -4689,10 +4724,11 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
             roleName: o.roleName,
             castName: o.castName,
             rank: o.rank,
-            note: o.note,
+            note: o.note || '',
             projectName: o.projectName,
-            slack_user_id: o.slack_user_id,
-            conflictInfo: o.conflictInfo
+            slack_user_id: o.slack_user_id,     // For Mention
+            conflictInfo: o.conflictInfo,
+            isInternal: o.cast.isInternal // For Internal check
           })),
           orderType: "pattern_a",
           ccString: data.ccString || "",
@@ -5235,7 +5271,7 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
           // スプレッドシート "キャストリスト" に 1 行追加
           await gapi.client.sheets.spreadsheets.values.append({
             spreadsheetId: SPREADSHEET_ID,
-            range: 'キャストリスト!A2',
+            range: 'キャストリスト',
             valueInputOption: 'USER_ENTERED',
             insertDataOption: 'INSERT_ROWS',
             resource: {
