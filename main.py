@@ -14,6 +14,7 @@ import gspread_asyncio
 from google.oauth2.service_account import Credentials
 import aiohttp
 from datetime import datetime
+from googleapiclient.discovery import build
 
 # Auth imports
 from google_auth_oauthlib.flow import Flow
@@ -122,18 +123,40 @@ class SpecialOrderPayload(BaseModel):
     castIds: List[str]
     ordererEmail: str
 
+class SpecialOrderUpdatePayload(BaseModel):
+    slackThreadTs: str
+    title: Optional[str] = None
+    dates: Optional[List[str]] = None
+    startTime: Optional[str] = None
+    endTime: Optional[str] = None
+    castIds: Optional[List[str]] = None
+
+class SpecialOrderDeletePayload(BaseModel):
+    slackThreadTs: str
+
+class OrderDeletePayload(BaseModel):
+    castingId: str
+    slackThreadTs: str = ""
+
 # --- Helpers ---
 def get_creds():
     creds_json_str = os.getenv("GOOGLE_SHEETS_CREDS_JSON")
     if not creds_json_str:
-        # ローカルファイルフォールバック
-        json_path = os.path.join(BASE_DIR, 'google_sheets_creds.json')
+        json_path = os.path.join(BASE_DIR, 'service_account.json')
         if os.path.exists(json_path):
-             scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+             scopes = [
+                 "https://www.googleapis.com/auth/spreadsheets",
+                 "https://www.googleapis.com/auth/drive",
+                 "https://www.googleapis.com/auth/calendar"  # カレンダー権限追加
+             ]
              return Credentials.from_service_account_file(json_path, scopes=scopes)
         raise ValueError("環境変数 'GOOGLE_SHEETS_CREDS_JSON' が設定されていません。")
     
-    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/calendar"  # カレンダー権限追加
+    ]
     creds_dict = json.loads(creds_json_str)
     return Credentials.from_service_account_info(creds_dict, scopes=scopes)
 
@@ -525,6 +548,61 @@ async def notify_special_order(payload: SpecialOrderPayload):
         
         account_name = "外部案件" if payload.orderType == "external" else "社内イベント"
 
+        # 統合Slackメッセージを作成（全キャストをまとめて）
+        orderer_email_key = payload.ordererEmail.strip().lower()
+        cc_slack_id = email_to_slack_map.get(orderer_email_key)
+        cc_mention = f"<@{cc_slack_id}>" if cc_slack_id else payload.ordererEmail
+
+        dates_str = ", ".join(payload.dates).replace("-", "/")
+        time_range = f"{payload.startTime} ~ {payload.endTime}"
+        
+        # メッセージ構築
+        msg_lines = []
+        msg_lines.append(f"【{account_name}】")
+        msg_lines.append(f"`タイトル`\n{payload.title}")
+        msg_lines.append(f"`日時`\n{dates_str}")
+        msg_lines.append(f"`時間`\n{time_range}")
+        msg_lines.append("")
+        msg_lines.append("`キャスト`")
+        
+        # 全キャストをリスト表示
+        for cid in payload.castIds:
+            cid_str = str(cid).strip()
+            cast = cast_map.get(cid_str, {})
+            cast_name = cast.get("name") or "不明"
+            slack_id = cast.get("slack_id") or ""
+            mention = f"<@{slack_id}>" if slack_id else cast_name
+            cast_type = cast.get("type") or "外部"
+            type_label = "（内部）" if cast_type == "内部" else ""
+            msg_lines.append(f"・{mention} {type_label}")
+        
+        msg_lines.append("")
+        msg_lines.append(f"CC: {cc_mention}")
+        
+        msg = "\n".join(msg_lines)
+
+        # 1つのSlack投稿を送信
+        ts = None
+        permalink = ""
+        target_channel = SLACK_DEFAULT_CHANNEL
+
+        if payload.orderType == "external":
+            if SLACK_CHANNEL_EXTERNAL:
+                target_channel = SLACK_CHANNEL_EXTERNAL
+
+        try:
+            resp = await slack_client.chat_postMessage(
+                channel=target_channel,
+                text=msg
+            )
+            ts = resp.get("ts")
+            if ts:
+                perm = await slack_client.chat_getPermalink(channel=target_channel, message_ts=ts)
+                permalink = perm.get("permalink", "")
+        except Exception as e:
+            print(f"Slack error: {e}")
+
+        # 全キャスト×全日付分のレコードを作成（同じts、permalinkを使用）
         for cid in payload.castIds:
             cid_str = str(cid).strip()
             cast = cast_map.get(cid_str, {})
@@ -533,42 +611,6 @@ async def notify_special_order(payload: SpecialOrderPayload):
             cast_type = cast.get("type") or "外部"
             is_internal_cast = (cast_type == "内部")
             status = "仮キャスティング" if is_internal_cast else "決定"
-
-            slack_id = cast.get("slack_id") or ""
-            mention = f"<@{slack_id}>" if slack_id else cast_name
-            
-            orderer_email_key = payload.ordererEmail.strip().lower()
-            cc_slack_id = email_to_slack_map.get(orderer_email_key)
-            cc_mention = f"<@{cc_slack_id}>" if cc_slack_id else payload.ordererEmail
-
-            dates_str = ", ".join(payload.dates).replace("-", "/")
-            time_range = f"{payload.startTime} ~ {payload.endTime}"
-            
-            msg = f"{mention} \nCC: {cc_mention}\n\n"
-            msg += f"【{account_name}】\n"
-            msg += f"`タイトル`\n{payload.title}\n"
-            msg += f"`日時`\n{dates_str}\n"
-            msg += f"`時間`\n{time_range}"
-
-            ts = None
-            permalink = ""
-            target_channel = SLACK_DEFAULT_CHANNEL
-
-            if payload.orderType == "external":
-                if SLACK_CHANNEL_EXTERNAL:
-                    target_channel = SLACK_CHANNEL_EXTERNAL
-
-            try:
-                resp = await slack_client.chat_postMessage(
-                    channel=target_channel,
-                    text=msg
-                )
-                ts = resp.get("ts")
-                if ts:
-                    perm = await slack_client.chat_getPermalink(channel=target_channel, message_ts=ts)
-                    permalink = perm.get("permalink", "")
-            except Exception as e:
-                print(f"Slack error: {e}")
 
             for date in payload.dates:
                 casting_id = f"sp_{uuid.uuid4()}"
@@ -584,9 +626,9 @@ async def notify_special_order(payload: SpecialOrderPayload):
                     date,                   # H
                     1,                      # I
                     status,                 # J
-                    f"{time_range}",        # K
-                    ts,                     # L
-                    permalink,              # M
+                    f"{time_range}",        # K: 時間範囲（time_rangeフィールド）
+                    int(round(float(ts))),  # L: SlackスレッドID（四捨五入して整数化）
+                    permalink,              # M: 全レコードで同じpermalink
                     "その他",               # N
                     "",                     # O
                     "",                     # P
@@ -611,7 +653,7 @@ async def notify_special_order(payload: SpecialOrderPayload):
                         "end": date,
                         "email": cast_email,
                         "status": status,
-                        "time_range": time_range,
+                        "time_range": time_range,  # 時間情報を渡す
                         "rowNumber": None
                     })
 
@@ -808,13 +850,19 @@ async def update_shooting_contact_status(payload: ShootingContactUpdateItem):
         ss = await client.open_by_key(SHOOTING_CONTACT_SHEET_ID)
         sheet = await ss.worksheet("撮影連絡DB")
         
-        col_a = await sheet.col_values(1) 
+        col_a = await ws.col_values(1)
         
         try:
             row_idx = col_a.index(payload.castingId) + 1
         except ValueError:
             raise HTTPException(status_code=404, detail="Casting ID not found in DB")
-            
+        
+        # 前のステータスを取得（マスターデータ更新判定用）
+        prev_status = None
+        if payload.status is not None:
+            current_row = await sheet.row_values(row_idx)
+            prev_status = current_row[9] if len(current_row) > 9 else None  # J列
+        
         updates = []
         if payload.status is not None:
             updates.append({"range": f"J{row_idx}", "values": [[payload.status]]})
@@ -828,26 +876,43 @@ async def update_shooting_contact_status(payload: ShootingContactUpdateItem):
             updates.append({"range": f"N{row_idx}", "values": [[payload.address]]})
         if payload.makingUrl is not None:
             updates.append({"range": f"O{row_idx}", "values": [[payload.makingUrl]]})
-            
-        # ★P列: Cost (新規)
         if payload.cost is not None:
             updates.append({"range": f"P{row_idx}", "values": [[payload.cost]]})
-            
         if payload.postDate is not None:
             updates.append({"range": f"Q{row_idx}", "values": [[payload.postDate]]})
-            
         if payload.mainSub is not None:
             updates.append({"range": f"T{row_idx}", "values": [[payload.mainSub]]})
-
         if payload.poUuid is not None:
             updates.append({"range": f"U{row_idx}", "values": [[payload.poUuid]]})
 
-        # Update Timestamp (S列)
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         updates.append({"range": f"S{row_idx}", "values": [[now_str]]})
-            
+        
         if updates:
             await sheet.batch_update(updates)
+        
+        # マスターデータ更新（メイキング共有待ち→投稿日連絡待ち）
+        if prev_status == "メイキング共有待ち" and payload.status == "投稿日連絡待ち":
+            print(f"🔄 Status changed to 投稿日連絡待ち, syncing master data for {payload.castingId}")
+            try:
+                master_ss = await client.open_by_key(SPREADSHEET_ID)
+                master_ws = await master_ss.worksheet("マスターデータ")
+                master_col_a = await master_ws.col_values(1)
+                
+                try:
+                    master_row_idx = master_col_a.index(payload.castingId) + 1
+                    master_updates = []
+                    if payload.poUuid is not None:
+                        master_updates.append({"range": f"P{master_row_idx}", "values": [[payload.poUuid]]})
+                    if payload.cost is not None:
+                        master_updates.append({"range": f"O{master_row_idx}", "values": [[payload.cost]]})
+                    if master_updates:
+                        await master_ws.batch_update(master_updates)
+                        print(f"✅ Updated master data: poId={payload.poUuid}, amount={payload.cost}")
+                except ValueError:
+                    print(f"⚠️ CastingID {payload.castingId} not found in master data")
+            except Exception as e:
+                print(f"Error updating master data: {e}")
         
         return {"ok": True}
 
@@ -894,6 +959,358 @@ async def read_root(request: Request):
         "GOOGLE_API_KEY": GOOGLE_API_KEY,
     })
 
+# 特別オーダー編集・削除API
+# main.py の update_special_order 関数全体をこれに置き換えてください
+
+# main.py の update_special_order 関数をこれに置き換えてください
+
+@app.post("/api/special_order/update")
+async def update_special_order(payload: SpecialOrderUpdatePayload):
+    """
+    特別オーダーの更新
+    詳細なデバッグログを出力し、検索プロセスを可視化します
+    """
+    # [Log 1] リクエスト到達確認
+    print("\n" + "="*50)
+    print("🚀 API Call: /api/special_order/update")
+    print(f"📥 Received Payload TS: '{payload.slackThreadTs}' ({type(payload.slackThreadTs)})")
+    print(f"📥 Received Title: '{payload.title}'")
+    print("="*50)
+
+    if not payload.slackThreadTs:
+        print("❌ Error: slackThreadTs is missing/empty")
+        raise HTTPException(status_code=400, detail="slackThreadTs required")
+    
+    try:
+        print("🔹 Connecting to Google Sheets...")
+        creds = get_creds()
+        agcm_local = gspread_asyncio.AsyncioGspreadClientManager(lambda: creds)
+        gc = await agcm_local.authorize()
+        sh = await gc.open_by_key(SPREADSHEET_ID)
+        ws = await sh.worksheet("キャスティングリスト")
+        print("✅ Sheet connected.")
+        
+        # 全データ取得
+        print("🔹 Fetching all values from sheet...")
+        all_rows = await ws.get_all_values()
+        total_rows = len(all_rows)
+        print(f"✅ Fetched {total_rows} rows.")
+        
+        target_rows = []       # 更新対象の行番号とデータ
+        calendar_event_ids = [] # 更新対象のカレンダーイベントID
+        
+        # 検索対象のID (文字列化 & 空白削除)
+        search_ts_str = str(payload.slackThreadTs).strip()
+
+        print(f"🔹 Starting Search Loop. Target TS: [{search_ts_str}]")
+
+        # --- 比較用ヘルパー関数 ---
+        def is_match(sheet_val, search_val_str):
+            """
+            SlackThreadTsを四捨五入した値で比較
+            例: 1767953327.818619 → 1767953328
+            """
+            try:
+                # 両方を文字列化
+                sheet_str = str(sheet_val).strip()
+                search_str = str(search_val_str).strip()
+                
+                # シングルクォート除去
+                if sheet_str.startswith("'"):
+                    sheet_str = sheet_str[1:]
+                
+                # 四捨五入した値で比較
+                sheet_rounded = str(round(float(sheet_str)))
+                search_rounded = str(round(float(search_str)))
+                
+                # 四捨五入した値が一致すればOK
+                if sheet_rounded == search_rounded:
+                    print(f"   ✅ MATCH: Sheet[{sheet_str}] ≈ Target[{search_str}] (rounded: {sheet_rounded})")
+                    return True
+                
+                return False
+            except Exception as e:
+                print(f"   ⚠️ Comparison error: {e}")
+                return False
+        # ------------------------
+
+        # 検索ループ
+        for i, row in enumerate(all_rows[1:], start=2):
+            # L列(インデックス11) が ThreadTs
+            if len(row) > 11:
+                current_ts = row[11]
+                
+                # デバッグ: 最初の数行だけL列の中身を表示してみる
+                if i < 7: 
+                    print(f"   Row {i} L-col: '{current_ts}'")
+
+                if is_match(current_ts, search_ts_str):
+                    print(f"✅ FOUND at Row {i}!")
+                    target_rows.append((i, row))
+                    # O列(インデックス14) が CalendarEventId
+                    if len(row) > 14 and row[14]:
+                        calendar_event_ids.append(row[14])
+        
+        print(f"🔹 Search finished. Found {len(target_rows)} matching rows.")
+
+        if not target_rows:
+            print("❌ Order not found. Dumping L-col samples for debugging:")
+            # 見つからなかった場合、L列の値をいくつかダンプ
+            for k, r in enumerate(all_rows[1:10], start=2):
+                 val = r[11] if len(r) > 11 else "(Empty)"
+                 print(f"   Row {k}: {val}")
+            
+            raise HTTPException(status_code=404, detail=f"Order not found (TS: {search_ts_str})")
+        
+        # --- 1. スプレッドシートの更新 ---
+        print("🔹 Updating Spreadsheet...")
+        batch_updates = []
+        
+        new_time_range = f"{payload.startTime} ~ {payload.endTime}"
+        
+        # 1行目のデータから日付を取得（payloadにない場合のフォールバック）
+        current_start_date = target_rows[0][1][6] if len(target_rows[0][1]) > 6 else ""
+        primary_date = payload.dates[0] if (payload.dates and len(payload.dates) > 0) else current_start_date
+
+        print(f"   Update Info -> Title: {payload.title}, Date: {primary_date}, Time: {new_time_range}")
+
+        for row_idx, _ in target_rows:
+            # C列: Title
+            batch_updates.append({'range': f'C{row_idx}', 'values': [[payload.title]]})
+            # G列: StartDate, H列: EndDate
+            batch_updates.append({'range': f'G{row_idx}:H{row_idx}', 'values': [[primary_date, primary_date]]})
+            # K列: TimeRange
+            batch_updates.append({'range': f'K{row_idx}', 'values': [[new_time_range]]})
+            # L列: SlackThreadTs (四捨五入した整数値)
+            batch_updates.append({'range': f'L{row_idx}', 'values': [[int(round(float(search_ts_str)))]]})
+
+        if batch_updates:
+            await ws.batch_update(batch_updates, value_input_option="USER_ENTERED")
+            print("✅ Spreadsheet updated successfully.")
+
+        # --- 2. Slack通知 ---
+        try:
+            print("🔹 Sending Slack Notification...")
+            dates_text = ', '.join(payload.dates) if payload.dates else '変更なし'
+            await slack_client.chat_postMessage(
+                channel=SLACK_DEFAULT_CHANNEL,
+                thread_ts=payload.slackThreadTs,
+                text=f"オーダーが更新されました。\n\n【変更内容】\nタイトル: {payload.title}\n日時: {dates_text}\n時間: {new_time_range}"
+            )
+            print("✅ Slack Notification sent.")
+        except Exception as e:
+            print(f"⚠️ Slack update warning: {e}")
+        
+        # カレンダーイベント更新はフロントエンドで実行
+        # （gapiを使用してユーザー認証で更新）
+        print("ℹ️ Calendar updates will be handled by frontend using gapi")
+        
+        print("🎉 Update Process Completed.")
+        return {"ok": True, "calendar_event_ids": calendar_event_ids}
+    
+    except HTTPException as he:
+        print(f"❌ HTTPException: {he.detail}")
+        raise he
+    except Exception as e:
+        print(f"❌ Unexpected Error in update_special_order: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/special_order/delete")
+async def delete_special_order(payload: SpecialOrderDeletePayload):
+    """
+    特別オーダーの削除
+    同じslackThreadTsを持つレコードを全削除
+    """
+    if not payload.slackThreadTs:
+        raise HTTPException(status_code=400, detail="slackThreadTs required")
+    
+    try:
+        creds = get_creds()
+        agcm_local = gspread_asyncio.AsyncioGspreadClientManager(lambda: creds)
+        gc = await agcm_local.authorize()
+        sh = await gc.open_by_key(SPREADSHEET_ID)
+        ws = await sh.worksheet("キャスティングリスト")
+        
+        # 全データ取得
+        all_rows = await ws.get_all_values()
+        target_rows = []
+        calendar_event_ids = []
+        
+        # 検索対象のID (四捨五入して整数化)
+        search_ts_rounded = str(round(float(payload.slackThreadTs)))
+        
+        # 検索ループ（四捨五入マッチング）
+        for i, row in enumerate(all_rows[1:], start=2):
+            if len(row) > 11:
+                current_ts = str(row[11]).strip()
+                if current_ts.startswith("'"):
+                    current_ts = current_ts[1:]
+                
+                try:
+                    current_ts_rounded = str(round(float(current_ts)))
+                    if current_ts_rounded == search_ts_rounded:
+                        target_rows.append((i, row))
+                        # カレンダーイベントID収集（O列）
+                        if len(row) > 14 and row[14]:
+                            calendar_event_ids.append(row[14])
+                except:
+                    pass
+        
+        if not target_rows:
+            raise HTTPException(status_code=404, detail=f"Order not found (TS: {payload.slackThreadTs})")
+        
+        # カレンダーイベント削除はフロントエンドで実行
+        print(f"ℹ️ Calendar event deletion will be handled by frontend. Event IDs: {calendar_event_ids}")
+        
+        # Slack通知
+        account_name = target_rows[0][1][1]
+        project_name = target_rows[0][1][2]
+        await slack_client.chat_postMessage(
+            channel=SLACK_DEFAULT_CHANNEL,
+            thread_ts=payload.slackThreadTs,
+            text=f"オーダーが削除されました。\n【{account_name}】{project_name}"
+        )
+        
+        # シートから削除（後ろから削除して行番号のズレを防ぐ）
+        for row_idx, _ in reversed(target_rows):
+            await ws.delete_rows(row_idx)
+        
+        return {"ok": True, "calendar_event_ids": calendar_event_ids}
+    
+    except Exception as e:
+        print(f"Error in delete_special_order: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/order/delete")
+async def delete_order(payload: OrderDeletePayload):
+    """
+    通常オーダー（キャスト単位）の削除
+    castingIdで指定されたレコードを削除し、Slack通知を行う
+    """
+    if not payload.castingId:
+        raise HTTPException(status_code=400, detail="castingId required")
+    
+    try:
+        creds = get_creds()
+        agcm_local = gspread_asyncio.AsyncioGspreadClientManager(lambda: creds)
+        gc = await agcm_local.authorize()
+        sh = await gc.open_by_key(SPREADSHEET_ID)
+        ws = await sh.worksheet("キャスティングリスト")
+        
+        # 全データ取得
+        all_rows = await ws.get_all_values()
+        target_row = None
+        target_row_idx = None
+        
+        # castingIdで検索
+        for i, row in enumerate(all_rows[1:], start=2):
+            if len(row) > 0 and row[0] == payload.castingId:
+                target_row = row
+                target_row_idx = i
+                break
+        
+        if not target_row:
+            raise HTTPException(status_code=404, detail=f"Order not found (castingId: {payload.castingId})")
+        
+        # 行データから情報を取得
+        account_name = target_row[1] if len(target_row) > 1 else ""
+        project_name = target_row[2] if len(target_row) > 2 else ""
+        cast_name = target_row[5] if len(target_row) > 5 else ""
+        calendar_event_id = target_row[14] if len(target_row) > 14 else ""  # O列
+        slack_thread_ts = payload.slackThreadTs or (target_row[11] if len(target_row) > 11 else "")  # L列
+        
+        # Slack通知（スレッドにリプライ）
+        if slack_thread_ts and slack_client:
+            try:
+                await slack_client.chat_postMessage(
+                    channel=SLACK_DEFAULT_CHANNEL,
+                    thread_ts=slack_thread_ts,
+                    text=f"オーダーが削除されました。\n【{account_name}】{project_name}\nキャスト: {cast_name}"
+                )
+            except Exception as e:
+                print(f"Slack notification error: {e}")
+        
+        # ステータスを「削除済み」に更新（行は残す）
+        await ws.update_acell(f'J{target_row_idx}', '削除済み')
+        
+        return {
+            "ok": True,
+            "calendar_event_id": calendar_event_id,
+            "deleted_cast": cast_name
+        }
+    
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        print(f"Error in delete_order: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+# ========== マスターデータシート ==========
+
+async def initialize_master_data_sheet():
+    try:
+        client = await agcm.authorize()
+        ss = await client.open_by_key(SPREADSHEET_ID)
+        try:
+            ws = await ss.worksheet("マスターデータ")
+        except:
+            ws = await ss.add_worksheet(title="マスターデータ", rows=1000, cols=16)
+        first_cell = await ws.acell('A1')
+        if not first_cell.value:
+            await ws.update('A1:P1', [[
+                "CastingID", "アカウント", "作品名", "役名", "CastID", "キャスト名",
+                "開始日", "終了日", "備考", "SlackPermalink", "メイン/サブ",
+                "CalenderEventID", "ProjectID", "内部/外部", "金額", "発注書ID"
+            ]])
+        return True
+    except Exception as e:
+        print(f"Error init master data: {e}")
+        return False
+
+class MasterDataPayload(BaseModel):
+    castingId: str
+    accountName: str = ""
+    projectName: str = ""
+    roleName: str = ""
+    castId: str = ""
+    castName: str = ""
+    startDate: str = ""
+    endDate: str = ""
+    notes: str = ""
+    slackPermalink: str = ""
+    mainSub: str = "その他"
+    calendarEventId: str = ""
+    projectId: str = ""
+    castType: str = ""
+    amount: str = ""
+    poId: str = ""
+
+@app.post("/api/master_data/register")
+async def register_to_master_data(payload: MasterDataPayload):
+    try:
+        await initialize_master_data_sheet()
+        client = await agcm.authorize()
+        ss = await client.open_by_key(SPREADSHEET_ID)
+        ws = await ss.worksheet("マスターデータ")
+        col_a = await ws.col_values(1)
+        row_data = [
+            payload.castingId, payload.accountName, payload.projectName, payload.roleName,
+            payload.castId, payload.castName, payload.startDate, payload.endDate,
+            payload.notes, payload.slackPermalink, payload.mainSub, payload.calendarEventId,
+            payload.projectId, payload.castType, payload.amount, payload.poId
+        ]
+        try:
+            row_idx = col_a.index(payload.castingId) + 1
+            await ws.update(f'A{row_idx}:P{row_idx}', [row_data])
+        except ValueError:
+            await ws.append_row(row_data)
+        return {"ok": True}
+    except Exception as e:
+        print(f"Error in master data: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
