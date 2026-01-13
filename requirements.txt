@@ -7,3 +7,5 @@ pydantic==2.8.2
 aiohttp==3.9.5
 gspread-asyncio==2.0.0
 python-multipart==0.0.20
+google-api-python-client==2.111.0
+google-auth-oauthlib==1.2.0
