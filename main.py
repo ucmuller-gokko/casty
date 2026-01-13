@@ -850,7 +850,7 @@ async def update_shooting_contact_status(payload: ShootingContactUpdateItem):
         ss = await client.open_by_key(SHOOTING_CONTACT_SHEET_ID)
         sheet = await ss.worksheet("撮影連絡DB")
         
-        col_a = await ws.col_values(1)
+        col_a = await sheet.col_values(1)
         
         try:
             row_idx = col_a.index(payload.castingId) + 1
