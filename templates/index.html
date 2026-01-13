@@ -314,10 +314,22 @@
 
       async function loadConfig() {
         try {
-          const res = await fetch('/config');
-          if (!res.ok) return;
-          const conf = await res.json();
-          INTERNAL_HOLD_CALENDAR_ID = conf.calendar_id_internal_hold || '';
+          await fetch('/config')
+            .then(res => {
+              if (!res.ok) {
+                throw new Error(`HTTP error! status: ${res.status}`);
+              }
+              return res.json();
+            })
+            .then(conf => {
+              INTERNAL_HOLD_CALENDAR_ID = conf.calendar_id_internal_hold || '';
+              window.INTERNAL_HOLD_CALENDAR_ID = INTERNAL_HOLD_CALENDAR_ID; // グローバルに公開
+              console.log('Calendar ID loaded:', INTERNAL_HOLD_CALENDAR_ID);
+            })
+            .catch(e => {
+              console.error('Failed to load calendar config:', e);
+              throw e; // Re-throw to be caught by the outer try-catch
+            });
         } catch (e) {
           console.warn('Failed to load config', e);
         }
@@ -331,6 +343,11 @@
         box.classList.add(type === 'success' ? 'bg-green-500' : (type === 'error' ? 'bg-red-500' : 'bg-blue-500'));
         box.style.display = 'block'; setTimeout(() => { box.style.display = 'none'; }, 3000);
       }
+
+      // グローバルスコープから呼べるようにwindowに紐付け
+      window.showLoader = showLoader;
+      window.showMessage = showMessage;
+
       function updateCartCount() { const el = document.getElementById('cart-count'); if (el) el.textContent = Object.keys(cart).length; }
 
       function normalizeDateString(input) {
@@ -629,7 +646,7 @@
               'キャスティングリスト!A2:T',
               '権限管理リスト!A2:B',
               '撮影スケ_キャスト!A2:Z', // 修正: 範囲を広めに確保
-              '新香盤撮影リスト!A2:F',
+              '新香盤撮影リスト!A2:G',
               '内部キャストDB!A2:E'
             ],
           });
@@ -713,6 +730,7 @@
               rank: row?.[8] || '',
               status: row?.[9] || '',
               note: row?.[10] || '',
+              time_range: row?.[10] || '', // ★★★ これを追加してください ★★★
               slackThreadTs: slackThreadTs,
               slackPermalink: slackPermalink,
               mainSub: row?.[13] || 'その他',
@@ -783,7 +801,8 @@
               date: normalizeDateString(row[2]),
               team: row[3] || '',
               cd: row[4] || '',
-              fd: row[5] || ''
+              fd: row[5] || '',
+              p: row[6] || ''  // G列: Pディレクター
             })).filter(item => item.date);
           } else {
             window.shootingListData = [];
@@ -801,6 +820,10 @@
               }
             });
           }
+
+          // 外部関数から参照できるようにする
+          window.castingData = castingData;
+          window.isAdmin = isAdmin;
 
           renderCalendar();
           renderFilters();
@@ -873,6 +896,7 @@
             rank: row?.[8] || '',
             status: row?.[9] || '',
             note: row?.[10] || '',
+            time_range: row?.[10] || '', // ★★★ これを追加してください ★★★
             slackThreadTs,
             slackPermalink,
             mainSub: row?.[13] || 'その他',     // N列
@@ -922,6 +946,10 @@
             if (day >= b.startDay && day <= b.endDay) {
               if (CONFIRM_STATUS.includes(b.status)) {
                 isConf = true;
+                // 決定ステータスでもチーム名（アカウント名）を記録
+                if (b.accountName) {
+                  holdingTeams.add(b.accountName);
+                }
               } else if (NG_STATUS.includes(b.status)) {
                 isNG = true;
               } else if (PROV_STATUS.includes(b.status)) {
@@ -1029,8 +1057,14 @@
           let solid = false;
 
           if (stat.isConfirmed) {
-            solid = true;
-            badges.push(`<span class="bg-red-500 text-white text-xs font-semibold px-2 py-1 rounded-full">決定</span>`);
+            // 決定ステータス: グレー表示しない（solid=false）、チーム名をバッジに表示
+            if (stat.holdingTeams && stat.holdingTeams.length > 0) {
+              stat.holdingTeams.forEach(team => {
+                badges.push(`<span class="bg-red-500 text-white text-xs font-semibold px-2 py-1 rounded-full">${team} 決定</span>`);
+              });
+            } else {
+              badges.push(`<span class="bg-red-500 text-white text-xs font-semibold px-2 py-1 rounded-full">決定</span>`);
+            }
           } else if (stat.isNG) {
             solid = true;
             badges.push(`<span class="bg-gray-600 text-white text-xs font-semibold px-2 py-1 rounded-full">NG</span>`);
@@ -1053,8 +1087,9 @@
 
           const badgeHtml = badges.length > 0 ? `<div class="absolute top-2 right-2 flex flex-col gap-1 items-end z-10">${badges.join('')}</div>` : '';
 
-          const disabled = solid || inCart;
-          const buttonLabel = stat.isConfirmed ? 'キャスティング不可' : (stat.isNG ? 'NG' : (inCart ? '追加済み' : '仮キャスティング'));
+          // 決定ステータスでも仮キャスティングを許可（NG and inCartのみ無効化）
+          const disabled = stat.isNG || inCart;
+          const buttonLabel = stat.isConfirmed ? '仮キャスティング追加' : (stat.isNG ? 'NG' : (inCart ? '追加済み' : '仮キャスティング'));
 
           const meta = []; if (cast.gender) meta.push(cast.gender); if (Number.isFinite(cast.age)) meta.push(`${cast.age}歳`); meta.push(`出演: ${cast.appearanceCount}回`);
 
@@ -1192,6 +1227,8 @@
 
         const grouped = new Map();
         for (const c of castingData) {
+          // 削除済みは表示しない
+          if (c.status === '削除済み') continue;
           if (!c.startDate || !c.endDate) continue;
           const from = new Date(c.startDate);
           const to = new Date(c.endDate);
@@ -1315,10 +1352,22 @@
                   ? `<span class="ml-2 text-xs text-gray-500 font-normal">by ${updaters.join(', ')}</span>`
                   : '';
 
-                tempAccountHtml += `<div class="ml-4 mt-2">
-                    <h5 class="font-medium text-gray-700 mb-1">${project}${updaterLabel}</h5>`;
+                // 特別オーダーの場合、ヘッダーに編集ボタンを追加
+                const isSpecialOrder = (account === '外部案件' || account === '社内イベント');
+                let editButton = '';
+                if (isAdmin && isSpecialOrder && records[0]?.slackThreadTs) {
+                  editButton = `
+                    <button class="ml-3 px-3 py-1 bg-blue-600 text-white rounded text-xs hover:bg-blue-700 shadow-sm"
+                        onclick="openEditSpecialOrderModal('${records[0].slackThreadTs}')">
+                      📝 編集
+                    </button>
+                  `;
+                }
 
-                const tableRows = records.map(it => {
+                tempAccountHtml += `<div class="ml-4 mt-2">
+                    <h5 class="font-medium text-gray-700 mb-1 flex items-center">${project}${updaterLabel}${editButton}</h5>`;
+
+                const tableRows = records.map((it, projIdx) => {
                   const cast = castData.find(c => c.castId === it.castId);
                   const castName = cast?.name || it.castId;
                   const [badgeClass, rowMutedClass] = (() => {
@@ -1336,15 +1385,18 @@
                   let costDisplay = it.cost ? '¥' + Number(it.cost).toLocaleString() : '-';
                   let actionCol = '';
 
-                  if (ORDER_WAIT_STATUSES.includes(it.status)) {
+                  if (isAdmin) {
+                    // 管理者のみステータス変更可
                     costDisplay = `
                       <input type="text" class="status-cost-input border rounded px-1 py-0.5 text-xs w-20 text-right bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
                              value="${it.cost || ''}" placeholder="¥">
                     `;
+
+                    // 保存ボタンのみ表示（編集ボタンはヘッダーに移動）
                     actionCol = `
                       <button class="px-2 py-1 bg-emerald-600 text-white rounded text-xs hover:bg-emerald-700 shadow-sm whitespace-nowrap"
                           onclick="saveCastingCost('${it.castingId}', '${it.status}', this)">
-                          保存
+                        保存
                       </button>
                     `;
                   }
@@ -1580,9 +1632,11 @@
           // 2. 外部キャスト: OKになってもDBに登録しない（オフショット共有完了後などの別タイミング）。
 
           if (isFinal && (newStatus === "決定" || newStatus === "OK")) {
+            console.log(`[DEBUG] Status Update - CastID: ${rec.castId}, isInternal: ${rec.isInternal}, isInternalCast: ${isInternalCast}, newStatus: ${newStatus}`);
             // --- 外部キャストの場合 ---
             // リクエスト修正: 外部キャストは「OK/決定」で撮影連絡DBに保存する（重複防止あり）
             if (!isInternalCast) {
+              console.log(`[DEBUG] External Cast - Proceeding to DB registration check. dbSentStatus: ${rec.dbSentStatus}`);
               // X列 (dbSentStatus) が "済" でなければ保存
               if (rec.dbSentStatus !== "済") {
                 const updaterEmail = currentUser?.email || '';
@@ -1633,7 +1687,43 @@
             } else {
               // --- 内部キャストの場合 ---
               // 撮影連絡DBには保存しない
-              console.log("Internal Cast: Skipping auto-save to Shooting DB on OK status as per request.");
+              console.log(`[DEBUG] Internal Cast - Skipping Shooting DB registration for CastID: ${rec.castId}, CastName: ${rec.castName}`);
+            }
+
+            // マスターデータ登録（内部・外部どちらも）
+            try {
+              const masterDataPayload = {
+                castingId: rec.castingId,
+                accountName: rec.accountName,
+                projectName: rec.projectName,
+                roleName: rec.roleName,
+                castId: rec.castId,
+                castName: rec.castName,
+                startDate: rec.startDate,
+                endDate: rec.endDate,
+                notes: rec.note || "",
+                slackPermalink: rec.slackPermalink || "",
+                mainSub: rec.mainSub || "その他",
+                calendarEventId: rec.calendarEventId || "",
+                projectId: rec.projectId || "",
+                castType: isInternalCast ? "内部" : "外部",
+                amount: rec.cost || "",
+                poId: ""
+              };
+
+              const masterRes = await fetch("/api/master_data/register", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(masterDataPayload)
+              });
+
+              if (masterRes.ok) {
+                console.log("✅ Registered to master data: " + rec.castingId);
+              } else {
+                console.error("Failed to register to master data:", await masterRes.text());
+              }
+            } catch (err) {
+              console.error("Exception registering to master data:", err);
             }
           }
           showMessage('ステータスを更新しました。');
@@ -1653,7 +1743,7 @@
 
         const modal = document.getElementById('edit-modal'); if (!modal) return;
         modal.innerHTML = `
-      <div class="bg-white rounded-lg shadow-xl max-w-md w-full p-5">
+                < div class= "bg-white rounded-lg shadow-xl max-w-md w-full p-5" >
         <div class="flex items-center justify-between mb-3">
           <h3 class="text-lg font-bold">キャスティング編集</h3>
           <button id="edit-close" class="text-gray-600 hover:text-gray-800">&times;</button>
@@ -1708,11 +1798,14 @@
               placeholder="条件や注意事項などを入力してください"></textarea>
           </div>
         </div>
-        <div class="mt-4 flex justify-end gap-3">
-          <button id="edit-cancel" class="px-4 py-2 rounded-md border border-gray-300">閉じる</button>
-          <button id="edit-save" class="px-4 py-2 rounded-md bg-blue-600 text-white font-semibold">保存</button>
+        <div class="mt-4 flex justify-between">
+          <button id="edit-delete" class="px-4 py-2 rounded-md bg-red-600 text-white font-semibold hover:bg-red-700">削除</button>
+          <div class="flex gap-3">
+            <button id="edit-cancel" class="px-4 py-2 rounded-md border border-gray-300">閉じる</button>
+            <button id="edit-save" class="px-4 py-2 rounded-md bg-blue-600 text-white font-semibold">保存</button>
+          </div>
         </div>
-      </div>`;
+      </div > `;
         modal.classList.remove('hidden');
 
         const statusSelect = modal.querySelector('#edit-status');
@@ -1731,6 +1824,10 @@
         modal.querySelector('#edit-cancel')?.addEventListener('click', closeEditModal);
         modal.querySelector('#edit-save')?.addEventListener('click', async () => {
           await saveEdit(castingId);
+        });
+        modal.querySelector('#edit-delete')?.addEventListener('click', async () => {
+          if (!confirm(`このオーダー（${rec.castName}）を削除しますか？\n\nSlack通知、スプレッドシート更新、カレンダーイベント削除が行われます。`)) return;
+          await deleteCastingOrder(castingId);
         });
       }
       function closeEditModal() { const modal = document.getElementById('edit-modal'); if (!modal) return; modal.classList.add('hidden'); modal.innerHTML = ''; }
@@ -2061,6 +2158,60 @@ X、Instagram、YouTube
         } finally { showLoader(false); }
       }
 
+      async function deleteCastingOrder(castingId) {
+        if (!isAdmin) { showMessage('権限がありません。', 'error'); return; }
+        const rec = castingData.find(c => c.castingId === castingId);
+        if (!rec) { showMessage('対象が見つかりません。', 'error'); return; }
+
+        showLoader(true);
+        try {
+          // 1. バックエンドAPI呼び出し（Slack通知 + スプレッドシート削除）
+          const res = await fetch('/api/order/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              castingId: rec.castingId,
+              slackThreadTs: rec.slackThreadTs || ''
+            })
+          });
+
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || '削除に失敗しました');
+          }
+          const data = await res.json();
+
+          // 2. カレンダーイベント削除（内部キャストの場合）
+          if (rec.calendarEventId && INTERNAL_HOLD_CALENDAR_ID) {
+            try {
+              await gapi.client.calendar.events.delete({
+                calendarId: INTERNAL_HOLD_CALENDAR_ID,
+                eventId: rec.calendarEventId
+              });
+              console.log('カレンダーイベントを削除しました:', rec.calendarEventId);
+            } catch (e) {
+              // 404（すでに削除済み）の場合は無視
+              if (!(e && e.status === 404)) {
+                console.error('カレンダー削除失敗:', e);
+              }
+            }
+          }
+
+          // 3. ローカルデータのステータスを更新（削除ではなく）
+          rec.status = '削除済み';
+
+          // 4. UI更新
+          closeEditModal();
+          showMessage('オーダーを削除しました。', 'success');
+          await renderCastingStatusView(false);
+          displayAvailableCasts();
+        } catch (e) {
+          console.error(e);
+          showMessage('削除に失敗しました: ' + e.message, 'error');
+        } finally {
+          showLoader(false);
+        }
+      }
 
       function openStatusQuickModal(castingId) {
         if (!isAdmin) { showMessage('権限がありません。', 'error'); return; }
@@ -2135,9 +2286,12 @@ X、Instagram、YouTube
           </div>
         </div>
 
-        <div class="mt-6 flex justify-end gap-3">
-          <button id="status-quick-cancel" class="px-4 py-2 rounded-md border border-gray-300">キャンセル</button>
-          <button id="status-quick-save" class="px-4 py-2 rounded-md bg-blue-600 text-white font-semibold">更新</button>
+        <div class="mt-6 flex justify-between">
+          <button id="status-quick-delete" class="px-4 py-2 rounded-md bg-red-600 text-white font-semibold hover:bg-red-700">削除</button>
+          <div class="flex gap-3">
+            <button id="status-quick-cancel" class="px-4 py-2 rounded-md border border-gray-300">キャンセル</button>
+            <button id="status-quick-save" class="px-4 py-2 rounded-md bg-blue-600 text-white font-semibold">更新</button>
+          </div>
         </div>
       </div>`;
 
@@ -2181,6 +2335,13 @@ X、Instagram、YouTube
           });
 
           closeStatusQuickModal();
+        });
+
+        // 削除ボタン
+        modal.querySelector('#status-quick-delete')?.addEventListener('click', async () => {
+          if (!confirm(`このオーダー（${castName}）を削除しますか？\n\nSlack通知、スプレッドシート更新、カレンダーイベント削除が行われます。`)) return;
+          closeStatusQuickModal();
+          await deleteCastingOrder(rec.castingId);
         });
       }
 
@@ -3023,18 +3184,39 @@ ${roleName}：${item.cast.name}`;
           descriptionLines.push('この予定はキャスティング管理システムから自動作成されています。');
           descriptionLines.push('ステータス変更時にはシステム側で更新される場合があります。');
 
-          // 終日イベント用（end は翌日）
+          // 時間指定イベント用（time_rangeから開始・終了時刻を抽出）
           const startDateStr = ev.start;
-          const endDateObj = new Date(ev.end);
-          endDateObj.setDate(endDateObj.getDate() + 1);
-          const endDateStr = d2str(endDateObj);
+          const endDateStr = ev.end;
 
-          const resource = {
-            summary,
-            description: descriptionLines.join('\n'),
-            start: { date: startDateStr, timeZone: 'Asia/Tokyo' },
-            end: { date: endDateStr, timeZone: 'Asia/Tokyo' },
-          };
+          let resource;
+
+          // time_rangeから時刻を抽出 (例: "10:00 ~ 18:00")
+          if (ev.time_range && ev.time_range.includes('~')) {
+            const [startTime, endTime] = ev.time_range.split('~').map(t => t.trim());
+            // ISO 8601形式で日時を作成 (例: "2024-12-25T10:00:00+09:00")
+            const startDateTime = `${startDateStr}T${startTime}:00+09:00`;
+            const endDateTime = `${endDateStr}T${endTime}:00+09:00`;
+
+            resource = {
+              summary,
+              description: descriptionLines.join('\n'),
+              start: { dateTime: startDateTime, timeZone: 'Asia/Tokyo' },
+              end: { dateTime: endDateTime, timeZone: 'Asia/Tokyo' },
+            };
+          } else {
+            // 時間が指定されていない場合は終日イベントとして作成
+            // 終日イベントの終了日は翌日を指定（Googleカレンダーの仕様）
+            const endDate = new Date(endDateStr);
+            endDate.setDate(endDate.getDate() + 1);
+            const endDatePlusOne = endDate.toISOString().split('T')[0];
+
+            resource = {
+              summary,
+              description: descriptionLines.join('\n'),
+              start: { date: startDateStr },  // 終日イベント
+              end: { date: endDatePlusOne },  // 終日イベント（翌日）
+            };
+          }
 
           // 内部キャストメールがあれば出席者として招待
           if (ev.email) {
@@ -4553,6 +4735,7 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
           const names = [];
           if (selectedShooting.cd) names.push(...selectedShooting.cd.split(/[,、]/).map(s => s.trim()));
           if (selectedShooting.fd) names.push(...selectedShooting.fd.split(/[,、]/).map(s => s.trim()));
+          if (selectedShooting.p) names.push(...selectedShooting.p.split(/[,、]/).map(s => s.trim()));  // Pディレクター追加
           const ccIds = new Set();
           names.forEach(name => {
             if (window.internalCastMap.has(name)) ccIds.add(window.internalCastMap.get(name));
@@ -5776,7 +5959,387 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
       document.head.appendChild(gisScript); // ★ここを修正しました
     });
 
+    // ===== 特別オーダー編集・削除機能 =====
+    let currentEditingThreadTs = null;
+    let currentDeletingThreadTs = null;
+    let currentDeletingInfo = {};
+
+    function openEditSpecialOrderModal(slackThreadTs) {
+      // isAdminはグローバルスコープで定義されているので直接アクセス可能
+      if (!window.isAdmin && typeof isAdmin !== 'undefined' && !isAdmin) {
+        showMessage('権限がありません。', 'error');
+        return;
+      }
+
+      // 同じslackThreadTsを持つレコードを取得
+      const castingDataList = window.castingData || (typeof castingData !== 'undefined' ? castingData : []);
+      const records = castingDataList.filter(c => c.slackThreadTs === slackThreadTs);
+      if (!records || records.length === 0) {
+        showMessage('対象のオーダーが見つかりません。', 'error');
+        return;
+      }
+
+      currentEditingThreadTs = slackThreadTs;
+      currentDeletingThreadTs = slackThreadTs; // 削除用にも保存
+      const first = records[0];
+
+      // 削除用の情報も保存
+      currentDeletingInfo = {
+        accountName: first.accountName,
+        projectName: first.projectName
+      };
+
+      // 日付を収集
+      const dates = [...new Set(records.map(r => r.startDate))].sort();
+
+      // time_rangeから時間を抽出 (例: "10:00 ~ 18:00")
+      let startTime = '09:00';
+      let endTime = '18:00';
+      if (first.time_range && first.time_range.includes('~')) {
+        const [st, et] = first.time_range.split('~').map(t => t.trim());
+        startTime = st;
+        endTime = et;
+      }
+
+      // フォームに値を設定
+      document.getElementById('edit-special-title').value = first.projectName || '';
+      document.getElementById('edit-special-start-time').value = startTime;
+      document.getElementById('edit-special-end-time').value = endTime;
+      document.getElementById('edit-special-dates').value = dates.join(',');
+
+      // 現在の情報を表示
+      const casts = [...new Set(records.map(r => r.castName))];
+      document.getElementById('edit-special-current-info').innerHTML = `
+        <div class="font-medium mb-2">現在の情報:</div>
+        <div>アカウント: ${first.accountName}</div>
+        <div>キャスト: ${casts.join(', ')}</div>
+        <div>レコード数: ${records.length}件</div>
+      `;
+
+      // モーダル表示
+      const modal = document.getElementById('edit-special-order-modal');
+      if (modal) {
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+      }
+    }
+
+    function closeEditSpecialOrderModal() {
+      const modal = document.getElementById('edit-special-order-modal');
+      if (modal) {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+      }
+      currentEditingThreadTs = null;
+    }
+
+    async function saveEditSpecialOrder() {
+      if (!currentEditingThreadTs) return;
+
+      const title = document.getElementById('edit-special-title').value.trim();
+      const startTime = document.getElementById('edit-special-start-time').value;
+      const endTime = document.getElementById('edit-special-end-time').value;
+      const datesStr = document.getElementById('edit-special-dates').value.trim();
+
+      if (!title || !startTime || !endTime || !datesStr) {
+        showMessage('全ての項目を入力してください。', 'error');
+        return;
+      }
+
+      const dates = datesStr.split(',').map(d => d.trim()).filter(Boolean);
+
+      showLoader(true);
+      try {
+        const res = await fetch('/api/special_order/update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            slackThreadTs: currentEditingThreadTs,
+            title,
+            dates,
+            startTime,
+            endTime
+          })
+        });
+
+        if (!res.ok) {
+          const err = await res.text();
+          throw new Error(err);
+        }
+
+        const data = await res.json();
+
+        // カレンダーイベント更新（削除→作成パターン）
+        const calendarId = window.INTERNAL_HOLD_CALENDAR_ID || (typeof INTERNAL_HOLD_CALENDAR_ID !== 'undefined' ? INTERNAL_HOLD_CALENDAR_ID : '');
+
+        if (data.calendar_event_ids && data.calendar_event_ids.length > 0 && calendarId) {
+          console.log('Deleting old calendar events:', data.calendar_event_ids);
+
+          // 1. 古いイベントを削除
+          for (const eventId of data.calendar_event_ids) {
+            try {
+              await gapi.client.calendar.events.delete({
+                calendarId: calendarId,
+                eventId: eventId
+              });
+              console.log(`✅ Deleted calendar event: ${eventId}`);
+            } catch (delErr) {
+              console.warn(`Failed to delete calendar event ${eventId}:`, delErr);
+            }
+          }
+
+          // 2. 新しいイベントを作成
+          console.log('Creating new calendar events');
+          // castingDataから該当レコードを見つける
+          const castingDataList = window.castingData || (typeof castingData !== 'undefined' ? castingData : []);
+          const records = castingDataList.filter(c => {
+            const ts1 = String(Math.round(parseFloat(c.slackThreadTs || 0)));
+            const ts2 = String(Math.round(parseFloat(currentEditingThreadTs || 0)));
+            return ts1 === ts2;
+          });
+
+          if (records.length > 0) {
+            const accountName = records[0].accountName || '不明';
+            const castEmails = [...new Set(records.map(r => r.castEmail).filter(Boolean))];
+
+            for (const date of dates) {
+              const startDateTime = `${date}T${startTime}:00+09:00`;
+              const endDateTime = `${date}T${endTime}:00+09:00`;
+
+              const summary = `${accountName}_仮キャスティング`;
+              const descriptionLines = [
+                '【キャスティング仮ホールド】',
+                '',
+                `・アカウント: ${accountName}`,
+                `・作品名: ${title}`,
+                `・時間: ${startTime} ~ ${endTime}`,
+                '',
+                'この予定はキャスティング管理システムから更新されました。'
+              ];
+
+              const resource = {
+                summary,
+                description: descriptionLines.join('\n'),
+                start: { dateTime: startDateTime, timeZone: 'Asia/Tokyo' },
+                end: { dateTime: endDateTime, timeZone: 'Asia/Tokyo' }
+              };
+
+              if (castEmails.length > 0) {
+                resource.attendees = castEmails.map(email => ({ email }));
+              }
+
+              try {
+                await gapi.client.calendar.events.insert({
+                  calendarId: calendarId,
+                  resource
+                });
+                console.log(`✅ Created new calendar event for ${date}`);
+              } catch (createErr) {
+                console.error('Failed to create calendar event:', createErr);
+              }
+            }
+          }
+        }
+
+        showMessage('オーダーを更新しました。', 'success');
+        closeEditSpecialOrderModal();
+
+        // データ再読み込み
+        await renderCastingStatusView(true);
+      } catch (e) {
+        console.error(e);
+        showMessage('更新に失敗しました: ' + e.message, 'error');
+      } finally {
+        showLoader(false);
+      }
+    }
+
+    function confirmDeleteSpecialOrder(slackThreadTs, accountName, projectName) {
+      if (!isAdmin) {
+        showMessage('権限がありません。', 'error');
+        return;
+      }
+
+      currentDeletingThreadTs = slackThreadTs;
+      currentDeletingInfo = { accountName, projectName };
+
+      // 削除対象の情報を表示
+      const castingDataList = window.castingData || (typeof castingData !== 'undefined' ? castingData : []);
+      const records = castingDataList.filter(c => c.slackThreadTs === slackThreadTs);
+      const casts = [...new Set(records.map(r => r.castName))];
+
+      document.getElementById('delete-special-order-info').innerHTML = `
+        <div class="bg-gray-50 p-3 rounded">
+          <div class="font-medium text-red-600 mb-2">削除対象:</div>
+          <div>【${accountName}】${projectName}</div>
+          <div class="text-xs text-gray-600 mt-2">キャスト: ${casts.join(', ')}</div>
+          <div class="text-xs text-gray-600">レコード数: ${records.length}件</div>
+        </div>
+      `;
+
+      // モーダル表示
+      const modal = document.getElementById('delete-special-order-modal');
+      if (modal) {
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+      }
+    }
+
+    function confirmDeleteFromEdit() {
+      // 編集モーダルから削除確認モーダルを開く
+      if (!currentDeletingThreadTs || !currentDeletingInfo.accountName) {
+        showMessage('削除対象の情報が見つかりません。', 'error');
+        return;
+      }
+
+      // 編集モーダルを閉じる
+      closeEditSpecialOrderModal();
+
+      // 削除確認モーダルを開く
+      confirmDeleteSpecialOrder(
+        currentDeletingThreadTs,
+        currentDeletingInfo.accountName,
+        currentDeletingInfo.projectName
+      );
+    }
+
+    function closeDeleteSpecialOrderModal() {
+      const modal = document.getElementById('delete-special-order-modal');
+      if (modal) {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+      }
+      currentDeletingThreadTs = null;
+      currentDeletingInfo = {};
+    }
+
+    async function executeDeleteSpecialOrder() {
+      if (!currentDeletingThreadTs) return;
+
+      showLoader(true);
+      try {
+        const res = await fetch('/api/special_order/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            slackThreadTs: currentDeletingThreadTs
+          })
+        });
+
+        if (!res.ok) {
+          const err = await res.text();
+          throw new Error(err);
+        }
+
+        const data = await res.json();
+
+        // カレンダーイベント削除
+        const calendarId = window.INTERNAL_HOLD_CALENDAR_ID || INTERNAL_HOLD_CALENDAR_ID;
+        if (data.calendar_event_ids && data.calendar_event_ids.length > 0 && calendarId) {
+          console.log('Deleting calendar events:', data.calendar_event_ids);
+          for (const eventId of data.calendar_event_ids) {
+            try {
+              await gapi.client.calendar.events.delete({
+                calendarId: calendarId,
+                eventId: eventId
+              });
+              console.log(`✅ Deleted calendar event: ${eventId}`);
+            } catch (calErr) {
+              console.warn(`Failed to delete calendar event ${eventId}:`, calErr);
+            }
+          }
+        }
+
+        showMessage('オーダーを削除しました。', 'success');
+        closeDeleteSpecialOrderModal();
+
+        // データ再読み込み
+        await renderCastingStatusView(true);
+      } catch (e) {
+        console.error(e);
+        showMessage('削除に失敗しました: ' + e.message, 'error');
+      } finally {
+        showLoader(false);
+      }
+    }
+
   </script>
+
+  <!-- 特別オーダー編集モーダル -->
+  <div id="edit-special-order-modal"
+    class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
+    <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-lg font-bold">オーダー編集</h3>
+        <button onclick="closeEditSpecialOrderModal()"
+          class="text-gray-600 hover:text-gray-800 text-2xl">&times;</button>
+      </div>
+
+      <div class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium mb-1">タイトル</label>
+          <input id="edit-special-title" type="text" class="w-full border rounded px-3 py-2" />
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium mb-1">開始時刻</label>
+            <input id="edit-special-start-time" type="time" class="w-full border rounded px-3 py-2" />
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1">終了時刻</label>
+            <input id="edit-special-end-time" type="time" class="w-full border rounded px-3 py-2" />
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-1">日付（カンマ区切り）</label>
+          <input id="edit-special-dates" type="text" class="w-full border rounded px-3 py-2"
+            placeholder="2024-12-25,2024-12-26" />
+        </div>
+
+        <div id="edit-special-current-info" class="text-sm text-gray-600 bg-gray-50 p-3 rounded">
+          <!-- 現在の情報を表示 -->
+        </div>
+      </div>
+
+      <div class="flex gap-2 mt-6">
+        <button onclick="closeEditSpecialOrderModal()"
+          class="flex-1 px-4 py-2 border rounded hover:bg-gray-50">キャンセル</button>
+        <button onclick="confirmDeleteFromEdit()" class="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700">🗑
+          削除</button>
+        <button onclick="saveEditSpecialOrder()"
+          class="flex-1 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 特別オーダー削除確認モーダル -->
+  <div id="delete-special-order-modal"
+    class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
+    <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-lg font-bold text-red-600">⚠️ オーダー削除</h3>
+        <button onclick="closeDeleteSpecialOrderModal()"
+          class="text-gray-600 hover:text-gray-800 text-2xl">&times;</button>
+      </div>
+
+      <div id="delete-special-order-info" class="mb-6 text-sm">
+        <!-- 削除対象の情報を表示 -->
+      </div>
+
+      <p class="text-sm text-gray-700 mb-4">
+        この操作は取り消せません。関連する全てのレコードとカレンダーイベントが削除されます。
+      </p>
+
+      <div class="flex gap-2">
+        <button onclick="closeDeleteSpecialOrderModal()"
+          class="flex-1 px-4 py-2 border rounded hover:bg-gray-50">キャンセル</button>
+        <button onclick="executeDeleteSpecialOrder()"
+          class="flex-1 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700">削除する</button>
+      </div>
+    </div>
+  </div>
 </body>
 
 </html>
