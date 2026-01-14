@@ -454,12 +454,38 @@ async def notify_order_created(
             )
             sent_via_upload = True
             
+            # レスポンスからtsを取得（複数のパターンに対応）
             if hasattr(response, 'data') and isinstance(response.data, dict):
-                 files_resp = response.data.get("files", [])
-                 if files_resp:
-                     shares = files_resp[0].get("shares", {}).get("public", {})
-                     if channel in shares:
-                         ts = shares[channel][0].get("ts")
+                files_resp = response.data.get("files", [])
+                if files_resp:
+                    shares = files_resp[0].get("shares", {})
+                    # publicとprivate両方をチェック
+                    for share_type in ["public", "private"]:
+                        if share_type in shares and channel in shares[share_type]:
+                            ts = shares[share_type][channel][0].get("ts")
+                            print(f"✅ Got ts from files_upload_v2 ({share_type}): {ts}")
+                            break
+                    
+                    # sharesから取れなかった場合、file_threadから取得を試みる
+                    if not ts:
+                        for f in files_resp:
+                            if "shares" in f:
+                                for share_type in ["public", "private"]:
+                                    type_shares = f["shares"].get(share_type, {})
+                                    for ch_id, share_list in type_shares.items():
+                                        if share_list and "ts" in share_list[0]:
+                                            ts = share_list[0]["ts"]
+                                            print(f"✅ Got ts from file shares ({share_type}): {ts}")
+                                            break
+                                    if ts:
+                                        break
+                            if ts:
+                                break
+            
+            # それでも取れなかった場合はログ出力
+            if not ts:
+                print(f"⚠️ Could not extract ts from files_upload_v2 response")
+                print(f"   Response data: {response.data if hasattr(response, 'data') else response}")
 
         except Exception as e:
             print(f"PDF Upload Failed: {e}")
@@ -482,8 +508,9 @@ async def notify_order_created(
         try:
             perm = await slack_client.chat_getPermalink(channel=channel, message_ts=ts)
             permalink = perm.get("permalink", "")
-        except:
-            pass
+            print(f"✅ Got permalink: {permalink}")
+        except Exception as e:
+            print(f"⚠️ getPermalink failed: {e}")
 
     return {"ok": True, "ts": ts, "permalink": permalink, "upload_error": upload_error}
 
