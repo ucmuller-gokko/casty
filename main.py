@@ -627,7 +627,7 @@ async def notify_special_order(payload: SpecialOrderPayload):
                     1,                      # I
                     status,                 # J
                     f"{time_range}",        # K: 時間範囲（time_rangeフィールド）
-                    int(round(float(ts))),  # L: SlackスレッドID（四捨五入して整数化）
+                    ts,                     # L: SlackスレッドID（小数点付きで保存）
                     permalink,              # M: 全レコードで同じpermalink
                     "その他",               # N
                     "",                     # O
@@ -1019,13 +1019,9 @@ async def update_special_order(payload: SpecialOrderUpdatePayload):
                 if sheet_str.startswith("'"):
                     sheet_str = sheet_str[1:]
                 
-                # 四捨五入した値で比較
-                sheet_rounded = str(round(float(sheet_str)))
-                search_rounded = str(round(float(search_str)))
-                
-                # 四捨五入した値が一致すればOK
-                if sheet_rounded == search_rounded:
-                    print(f"   ✅ MATCH: Sheet[{sheet_str}] ≈ Target[{search_str}] (rounded: {sheet_rounded})")
+                # 完全一致で比較
+                if sheet_str == search_str:
+                    print(f"   ✅ MATCH: Sheet[{sheet_str}] == Target[{search_str}]")
                     return True
                 
                 return False
@@ -1081,8 +1077,8 @@ async def update_special_order(payload: SpecialOrderUpdatePayload):
             batch_updates.append({'range': f'G{row_idx}:H{row_idx}', 'values': [[primary_date, primary_date]]})
             # K列: TimeRange
             batch_updates.append({'range': f'K{row_idx}', 'values': [[new_time_range]]})
-            # L列: SlackThreadTs (四捨五入した整数値)
-            batch_updates.append({'range': f'L{row_idx}', 'values': [[int(round(float(search_ts_str)))]]})
+            # L列: SlackThreadTs (小数点付きで保存)
+            batch_updates.append({'range': f'L{row_idx}', 'values': [[search_ts_str]]})
 
         if batch_updates:
             await ws.batch_update(batch_updates, value_input_option="USER_ENTERED")
@@ -1138,25 +1134,21 @@ async def delete_special_order(payload: SpecialOrderDeletePayload):
         target_rows = []
         calendar_event_ids = []
         
-        # 検索対象のID (四捨五入して整数化)
-        search_ts_rounded = str(round(float(payload.slackThreadTs)))
+        # 検索対象のID (完全一致)
+        search_ts_str = str(payload.slackThreadTs).strip()
         
-        # 検索ループ（四捨五入マッチング）
+        # 検索ループ（完全一致マッチング）
         for i, row in enumerate(all_rows[1:], start=2):
             if len(row) > 11:
                 current_ts = str(row[11]).strip()
                 if current_ts.startswith("'"):
                     current_ts = current_ts[1:]
                 
-                try:
-                    current_ts_rounded = str(round(float(current_ts)))
-                    if current_ts_rounded == search_ts_rounded:
-                        target_rows.append((i, row))
-                        # カレンダーイベントID収集（O列）
-                        if len(row) > 14 and row[14]:
-                            calendar_event_ids.append(row[14])
-                except:
-                    pass
+                if current_ts == search_ts_str:
+                    target_rows.append((i, row))
+                    # カレンダーイベントID収集（O列）
+                    if len(row) > 14 and row[14]:
+                        calendar_event_ids.append(row[14])
         
         if not target_rows:
             raise HTTPException(status_code=404, detail=f"Order not found (TS: {payload.slackThreadTs})")
