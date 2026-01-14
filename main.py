@@ -454,19 +454,34 @@ async def notify_order_created(
             )
             sent_via_upload = True
             
-            # レスポンスからtsを取得（複数のパターンに対応）
+            # レスポンスからtsとpermalinkを取得（複数のフォールバック）
             if hasattr(response, 'data') and isinstance(response.data, dict):
                 files_resp = response.data.get("files", [])
+                print(f"📁 files_upload_v2 returned {len(files_resp)} file(s)")
+                
                 if files_resp:
-                    shares = files_resp[0].get("shares", {})
-                    # publicとprivate両方をチェック
+                    file_info = files_resp[0]
+                    shares = file_info.get("shares", {})
+                    
+                    # 方法1: shares.public または shares.private からts取得
                     for share_type in ["public", "private"]:
-                        if share_type in shares and channel in shares[share_type]:
-                            ts = shares[share_type][channel][0].get("ts")
-                            print(f"✅ Got ts from files_upload_v2 ({share_type}): {ts}")
+                        if share_type in shares:
+                            for ch_id, share_list in shares[share_type].items():
+                                if share_list and "ts" in share_list[0]:
+                                    ts = share_list[0]["ts"]
+                                    print(f"✅ Got ts from shares.{share_type}: {ts}")
+                                    break
+                        if ts:
                             break
                     
-                    # sharesから取れなかった場合、file_threadから取得を試みる
+                    # 方法2: tsが取れなかった場合、ファイルのpermalinkからts抽出
+                    if not ts and "permalink" in file_info:
+                        file_permalink = file_info["permalink"]
+                        # ファイルpermalinkからメッセージpermalinkへの変換は難しいが、
+                        # ファイルが共有されたメッセージのtsはshares内にあるはず
+                        print(f"⚠️ ts not found in shares, file permalink: {file_permalink}")
+                    
+                    # 方法3: shares内のどこかにtsがあれば取得
                     if not ts:
                         for f in files_resp:
                             if "shares" in f:
@@ -475,20 +490,47 @@ async def notify_order_created(
                                     for ch_id, share_list in type_shares.items():
                                         if share_list and "ts" in share_list[0]:
                                             ts = share_list[0]["ts"]
-                                            print(f"✅ Got ts from file shares ({share_type}): {ts}")
+                                            print(f"✅ Got ts from nested shares: {ts}")
                                             break
                                     if ts:
                                         break
                             if ts:
                                 break
-            
-            # それでも取れなかった場合はログ出力
-            if not ts:
-                print(f"⚠️ Could not extract ts from files_upload_v2 response")
-                print(f"   Response data: {response.data if hasattr(response, 'data') else response}")
+                    
+                    # 方法4: sharesが空の場合、files.infoで再取得
+                    if not ts and files_resp:
+                        file_id = files_resp[0].get("id")
+                        if file_id:
+                            print(f"🔍 Fetching file info for: {file_id}")
+                            try:
+                                import asyncio
+                                # 少し待ってからfiles.infoを取得（ファイル共有の処理待ち）
+                                await asyncio.sleep(2.0)  # 2秒待機
+                                file_info_resp = await slack_client.files_info(file=file_id)
+                                print(f"📄 files.info response received")
+                                if file_info_resp and "file" in file_info_resp:
+                                    file_data = file_info_resp["file"]
+                                    shares = file_data.get("shares", {})
+                                    print(f"   Shares keys: {list(shares.keys())}")
+                                    for share_type in ["public", "private"]:
+                                        if share_type in shares:
+                                            for ch_id, share_list in shares[share_type].items():
+                                                print(f"   {share_type}[{ch_id}]: {share_list}")
+                                                if share_list and "ts" in share_list[0]:
+                                                    ts = share_list[0]["ts"]
+                                                    print(f"✅ Got ts from files.info: {ts}")
+                                                    break
+                                        if ts:
+                                            break
+                            except Exception as file_info_err:
+                                print(f"⚠️ files.info failed: {file_info_err}")
+                    
+                    if not ts:
+                        print(f"⚠️ Could not extract ts. Response keys: {list(response.data.keys())}")
+                        print(f"   File shares: {shares}")
 
         except Exception as e:
-            print(f"PDF Upload Failed: {e}")
+            print(f"❌ PDF Upload Failed: {e}")
             upload_error = str(e)
 
     if not sent_via_upload:
@@ -500,8 +542,9 @@ async def notify_order_created(
                 thread_ts=payload.slackThreadTs
             )
             ts = res.get("ts")
+            print(f"✅ Fallback message sent, ts: {ts}")
         except Exception as e:
-            print(f"Text Message Failed: {e}")
+            print(f"❌ Text Message Failed: {e}")
             raise HTTPException(status_code=500, detail="Slack送信失敗")
 
     if ts:
@@ -654,7 +697,7 @@ async def notify_special_order(payload: SpecialOrderPayload):
                     1,                      # I
                     status,                 # J
                     f"{time_range}",        # K: 時間範囲（time_rangeフィールド）
-                    ts,                     # L: SlackスレッドID（小数点付きで保存）
+                    f"'{ts}",                # L: SlackスレッドID（シングルクォート付きで小数点保持）
                     permalink,              # M: 全レコードで同じpermalink
                     "その他",               # N
                     "",                     # O
@@ -1104,8 +1147,8 @@ async def update_special_order(payload: SpecialOrderUpdatePayload):
             batch_updates.append({'range': f'G{row_idx}:H{row_idx}', 'values': [[primary_date, primary_date]]})
             # K列: TimeRange
             batch_updates.append({'range': f'K{row_idx}', 'values': [[new_time_range]]})
-            # L列: SlackThreadTs (小数点付きで保存)
-            batch_updates.append({'range': f'L{row_idx}', 'values': [[search_ts_str]]})
+            # L列: SlackThreadTs (シングルクォート付きで小数点保持)
+            batch_updates.append({'range': f'L{row_idx}', 'values': [[f"'{search_ts_str}"]]})
 
         if batch_updates:
             await ws.batch_update(batch_updates, value_input_option="USER_ENTERED")
