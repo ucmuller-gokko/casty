@@ -697,7 +697,7 @@ async def notify_special_order(payload: SpecialOrderPayload):
                     1,                      # I
                     status,                 # J
                     f"{time_range}",        # K: 時間範囲（time_rangeフィールド）
-                    ts,                     # L: SlackスレッドID（小数点付きで保存）
+                    f"'{ts}",                # L: SlackスレッドID（シングルクォート付きで小数点保持）
                     permalink,              # M: 全レコードで同じpermalink
                     "その他",               # N
                     "",                     # O
@@ -1147,8 +1147,8 @@ async def update_special_order(payload: SpecialOrderUpdatePayload):
             batch_updates.append({'range': f'G{row_idx}:H{row_idx}', 'values': [[primary_date, primary_date]]})
             # K列: TimeRange
             batch_updates.append({'range': f'K{row_idx}', 'values': [[new_time_range]]})
-            # L列: SlackThreadTs (小数点付きで保存)
-            batch_updates.append({'range': f'L{row_idx}', 'values': [[search_ts_str]]})
+            # L列: SlackThreadTs (シングルクォート付きで小数点保持)
+            batch_updates.append({'range': f'L{row_idx}', 'values': [[f"'{search_ts_str}"]]})
 
         if batch_updates:
             await ws.batch_update(batch_updates, value_input_option="USER_ENTERED")
