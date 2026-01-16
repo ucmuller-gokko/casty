@@ -4054,7 +4054,7 @@ ${roleName}：${item.cast.name}`;
 
           pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
 
-          const fileName = `${data.shootDate.replace(/[\/-]/g, '')}_${data.project}_${data.castName}_発注書.pdf`;
+          const fileName = `${data.shootDate.replace(/[\/-]/g, '')}_${data.project}_${data.castName}様_発注書.pdf`;
           pdf.save(fileName);
 
           showMessage('発注書PDFをダウンロードしました', 'success');
