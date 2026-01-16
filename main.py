@@ -995,7 +995,7 @@ async def update_shooting_contact_status(payload: ShootingContactUpdateItem):
 @app.post("/api/sync/gas")
 async def sync_gas_trigger(type: str = "schedule"):
     if type == "schedule":
-        gas_url = "https://script.google.com/macros/s/AKfycbxN-wyoTYcLIAIVzp3gOwNIFUK02a1iGeV_-VPJlXKXx8bimlMe3oTDutljnGc8Xrkn/exec"
+        gas_url = "https://script.google.com/macros/s/AKfycbxOQ7-1epXjRA5XEmDlUYCjnC6NkpJMHpPePsytob--qtVdUN6zNY1ZK_qYKghjEduJ/exec"
     elif type == "making":
         gas_url = "https://script.google.com/macros/s/AKfycbxi2abt-T0FnzW2n5OvcwKNImlLLD0qqB5rZARO1kc9EuXXz342ee_11Ypnr56N3ap6/exec"
     elif type == "post_date":
