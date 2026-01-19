@@ -1158,8 +1158,14 @@ async def update_special_order(payload: SpecialOrderUpdatePayload):
         try:
             print("🔹 Sending Slack Notification...")
             dates_text = ', '.join(payload.dates) if payload.dates else '変更なし'
+            
+            # B列(index 1)からaccount_nameを取得してチャンネルを判定
+            account_name = target_rows[0][1][1] if len(target_rows[0][1]) > 1 else ""
+            target_channel = SLACK_CHANNEL_EXTERNAL if account_name == "外部案件" and SLACK_CHANNEL_EXTERNAL else SLACK_DEFAULT_CHANNEL
+            print(f"   Target Channel: {target_channel} (account: {account_name})")
+            
             await slack_client.chat_postMessage(
-                channel=SLACK_DEFAULT_CHANNEL,
+                channel=target_channel,
                 thread_ts=payload.slackThreadTs,
                 text=f"オーダーが更新されました。\n\n【変更内容】\nタイトル: {payload.title}\n日時: {dates_text}\n時間: {new_time_range}"
             )
@@ -1229,8 +1235,12 @@ async def delete_special_order(payload: SpecialOrderDeletePayload):
         # Slack通知
         account_name = target_rows[0][1][1]
         project_name = target_rows[0][1][2]
+        
+        # account_nameが「外部案件」ならSLACK_CHANNEL_EXTERNALを使用
+        target_channel = SLACK_CHANNEL_EXTERNAL if account_name == "外部案件" and SLACK_CHANNEL_EXTERNAL else SLACK_DEFAULT_CHANNEL
+        
         await slack_client.chat_postMessage(
-            channel=SLACK_DEFAULT_CHANNEL,
+            channel=target_channel,
             thread_ts=payload.slackThreadTs,
             text=f"オーダーが削除されました。\n【{account_name}】{project_name}"
         )
@@ -1286,8 +1296,11 @@ async def delete_order(payload: OrderDeletePayload):
         # Slack通知（スレッドにリプライ）
         if slack_thread_ts and slack_client:
             try:
+                # account_nameが「外部案件」ならSLACK_CHANNEL_EXTERNALを使用
+                target_channel = SLACK_CHANNEL_EXTERNAL if account_name == "外部案件" and SLACK_CHANNEL_EXTERNAL else SLACK_DEFAULT_CHANNEL
+                
                 await slack_client.chat_postMessage(
-                    channel=SLACK_DEFAULT_CHANNEL,
+                    channel=target_channel,
                     thread_ts=slack_thread_ts,
                     text=f"オーダーが削除されました。\n【{account_name}】{project_name}\nキャスト: {cast_name}"
                 )
