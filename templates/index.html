@@ -186,6 +186,30 @@
   </div>
   <div id="shoot-mail-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center modal-backdrop"></div>
 
+  <!-- Casting Summary Modal -->
+  <div id="casting-summary-modal"
+    class="hidden fixed inset-0 z-[75] flex items-center justify-center modal-backdrop bg-black bg-opacity-50">
+    <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-lg font-bold text-gray-800">キャスティング状況まとめ</h3>
+        <button id="casting-summary-close" class="text-gray-500 hover:text-gray-700">&times;</button>
+      </div>
+      <div class="mb-2">
+        <span class="text-sm text-gray-500" id="casting-summary-project-name"></span>
+      </div>
+      <textarea id="casting-summary-text" class="w-full h-64 p-3 border rounded-md font-mono text-sm bg-gray-50"
+        readonly></textarea>
+      <div class="mt-4 flex justify-end gap-3">
+        <button id="casting-summary-copy"
+          class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 font-semibold">
+          📋 コピー
+        </button>
+        <button id="casting-summary-cancel" class="px-4 py-2 border rounded-md hover:bg-gray-50">閉じる</button>
+      </div>
+    </div>
+  </div>
+
+
   <!-- No Shooting Selection Popup -->
   <div id="no-shooting-popup"
     class="hidden fixed inset-0 z-[70] flex items-center justify-center modal-backdrop bg-black bg-opacity-50">
@@ -1364,8 +1388,18 @@
                   `;
                 }
 
+                // キャスティング状況まとめボタン
+                const projectEscaped = project.replace(/'/g, "\\'").replace(/"/g, "&quot;");
+                const accountEscaped = account.replace(/'/g, "\\'").replace(/"/g, "&quot;");
+                const summaryButton = `
+                  <button class="ml-2 px-2 py-1 bg-gray-200 text-gray-700 rounded text-xs hover:bg-gray-300 shadow-sm"
+                      onclick="event.stopPropagation(); openCastingSummaryModal('${projectEscaped}', '${accountEscaped}', '${date}')">
+                    📋 まとめ
+                  </button>
+                `;
+
                 tempAccountHtml += `<div class="ml-4 mt-2">
-                    <h5 class="font-medium text-gray-700 mb-1 flex items-center">${project}${updaterLabel}${editButton}</h5>`;
+                    <h5 class="font-medium text-gray-700 mb-1 flex items-center">${project}${updaterLabel}${editButton}${summaryButton}</h5>`;
 
                 const tableRows = records.map((it, projIdx) => {
                   const cast = castData.find(c => c.castId === it.castId);
@@ -1389,7 +1423,7 @@
                     // 管理者のみステータス変更可
                     costDisplay = `
                       <input type="text" class="status-cost-input border rounded px-1 py-0.5 text-xs w-20 text-right bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
-                             value="${it.cost || ''}" placeholder="¥">
+                             value="${it.cost || ''}" placeholder="半角数字">
                     `;
 
                     // 保存ボタンのみ表示（編集ボタンはヘッダーに移動）
@@ -1626,6 +1660,17 @@
             await postStatusUpdateToSlack(rec, statusForSlack, finalExtraMessage);
           }
 
+          // 内部キャスト: 「仮キャスティング」→「打診中」の場合、メンション付きテンプレートをSlackに送信
+          if (isInternalCast && prevStatus === '仮キャスティング' && newStatus === '打診中' && rec.slackThreadTs) {
+            const castInfo = castData.find(c => c.castId === rec.castId);
+            const slackMentionId = castInfo?.slackMentionId || '';
+
+            if (slackMentionId) {
+              const mentionMessage = `<@${slackMentionId}> 上記日付の作品につきまして、出演可能かどうかスタンプorメッセージにてご回答ください`;
+              await postStatusUpdateToSlack(rec, newStatus, mentionMessage);
+            }
+          }
+
           // 「決定」の時、キャスト（内部含む）を撮影連絡DBへ追加
           // リクエスト変更:
           // 1. 内部キャスト: OKになったらDBに登録。ただし重複防止のためX列(dbSentStatus)をチェック。
@@ -1773,8 +1818,8 @@
             <input id="edit-bookedby" type="text" class="mt-1 w-full p-2 border rounded-md" value="${rec.updatedBy || currentUser?.email || ''}">
           </div>
           <div>
-            <label class="text-sm text-gray-700">金額</label>
-            <input id="edit-cost" type="text" class="mt-1 w-full p-2 border rounded-md" value="${rec.cost || ''}" placeholder="金額を入力">
+            <label class="text-sm text-gray-700">金額 <span class="text-xs text-gray-400">※半角数字で入力してください</span></label>
+            <input id="edit-cost" type="text" class="mt-1 w-full p-2 border rounded-md" value="${rec.cost || ''}" placeholder="半角数字で入力">
           </div>
           <div>
             <label class="text-sm text-gray-700">ステータス</label>
@@ -2259,13 +2304,13 @@ X、Instagram、YouTube
 
           <div>
             <label class="block text-xs font-medium text-gray-600 mb-1">
-              金額
+              金額 <span class="text-xs text-gray-400">※半角数字で入力</span>
             </label>
             <input
               type="text"
               id="status-edit-cost"
               class="w-full border rounded px-2 py-1 text-sm text-right"
-              placeholder="¥"
+              placeholder="半角数字"
               value="${rec.cost || ''}"
             >
           </div>
@@ -2350,6 +2395,60 @@ X、Instagram、YouTube
         if (!modal) return;
         modal.classList.add('hidden');
         modal.innerHTML = '';
+      }
+
+      // ========= Casting Summary Modal =========
+      function openCastingSummaryModal(projectName, accountName, date) {
+        const modal = document.getElementById('casting-summary-modal');
+        if (!modal) return;
+
+        // Filter records for this project (excluding NG, キャンセル, 削除済み)
+        const excludedStatuses = ['NG', 'キャンセル', '削除済み'];
+        const records = castingData.filter(c =>
+          c.projectName === projectName &&
+          c.accountName === accountName &&
+          !excludedStatuses.includes(c.status)
+        );
+
+        // Sort by role name, then by rank
+        records.sort((a, b) => {
+          if (a.roleName !== b.roleName) return (a.roleName || '').localeCompare(b.roleName || '');
+          return (Number(a.rank) || 999) - (Number(b.rank) || 999);
+        });
+
+        // Generate summary text
+        const lines = records.map(r => {
+          const cast = castData.find(c => c.castId === r.castId);
+          const castName = cast?.name || r.castName || r.castId;
+          const roleName = r.roleName || '未設定';
+          const status = r.status || '未定';
+          return `${roleName}：${castName}：${status}`;
+        });
+
+        const summaryText = lines.length > 0
+          ? lines.join('\n')
+          : '該当するキャスティング情報がありません';
+
+        // Display
+        document.getElementById('casting-summary-project-name').textContent = `作品名: ${projectName}`;
+        document.getElementById('casting-summary-text').value = summaryText;
+        modal.classList.remove('hidden');
+
+        // Event listeners
+        document.getElementById('casting-summary-close').onclick = closeCastingSummaryModal;
+        document.getElementById('casting-summary-cancel').onclick = closeCastingSummaryModal;
+        document.getElementById('casting-summary-copy').onclick = () => {
+          const textarea = document.getElementById('casting-summary-text');
+          textarea.select();
+          document.execCommand('copy');
+          showMessage('クリップボードにコピーしました');
+        };
+      }
+      window.openCastingSummaryModal = openCastingSummaryModal;
+
+      function closeCastingSummaryModal() {
+        const modal = document.getElementById('casting-summary-modal');
+        if (modal) modal.classList.add('hidden');
       }
 
       // ========= Calendar (today red) =========
@@ -2841,9 +2940,9 @@ X、Instagram、YouTube
             const slackMentionId = internalType === '内部' ? (castFull?.slackMentionId || '') : '';
             const isInternal = internalType === '内部';
 
-            // ステータス初期値
+            // ステータス初期値: 内部キャストは第1候補なら打診中、それ以外は仮キャスティング
             const statusValue = isInternal
-              ? '仮キャスティング'
+              ? (it.rank === 1 ? '打診中' : '仮キャスティング')
               : 'オーダー待ち';
 
             // Slack 通知用の注文情報
@@ -3524,7 +3623,7 @@ ${roleName}：${item.cast.name}`;
             costCol = `
             <td class="px-2 py-2 align-top">
               <input type="text" class="shoot-cost border rounded px-1 py-0.5 text-xs w-full text-right bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
-                     value="${item.cost || ''}" placeholder="¥">
+                     value="${item.cost || ''}" placeholder="半角数字">
             </td>`;
 
             // 保存ボタンを追加
@@ -3561,7 +3660,7 @@ ${roleName}：${item.cast.name}`;
             costCol = `
             <td class="px-2 py-2 align-top">
               <input type="text" class="shoot-cost border rounded px-1 py-0.5 text-xs w-full text-right bg-gray-50 focus:bg-white focus:ring-1 focus:ring-blue-300" 
-                     value="${item.cost || ''}" placeholder="¥">
+                     value="${item.cost || ''}" placeholder="半角数字">
             </td>`;
 
             // アクションボタン: 保存、発注書作成、メール
@@ -3882,8 +3981,8 @@ ${roleName}：${item.cast.name}`;
                 <input type="text" id="pdf-shootdate" class="w-full border rounded p-2" value="${data.shootDate}">
               </div>
               <div>
-                <label class="block font-bold text-gray-700">金額</label>
-                <input type="text" id="pdf-cost" class="w-full border rounded p-2" value="${data.cost}" placeholder="数値のみ入力すると自動フォーマットされます">
+                <label class="block font-bold text-gray-700">金額 <span class="text-xs text-gray-400 font-normal">※半角数字で入力してください</span></label>
+                <input type="text" id="pdf-cost" class="w-full border rounded p-2" value="${data.cost}" placeholder="半角数字で入力">
               </div>
               <div>
                 <label class="block font-bold text-gray-700">備考</label>
@@ -4988,7 +5087,10 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
           const castPriority = getNextCastPriority(castId, shootDate, shootDate, tempAssignments);
           tempAssignments[`${castId}_${shootDate}_${shootDate}`] = castPriority;
 
-          const initialStatus = cast.isInternal ? '打診中' : 'オーダー待ち';
+          // 内部キャスト: 第1候補は打診中、それ以外は仮キャスティング
+          const initialStatus = cast.isInternal
+            ? (minRank === 1 ? '打診中' : '仮キャスティング')
+            : 'オーダー待ち';
 
           if (cast.isInternal) {
             internalEvents.push({
