@@ -773,7 +773,10 @@ async def notify_status_update(
     if not channel:
         raise HTTPException(status_code=500, detail="Slack通知先チャンネルが未設定です。")
 
-    if payload.newStatus == "追加オーダー":
+    # 内部キャストで、extraMessageがSlackメンション（<@で始まる）の場合はそのまま送信
+    if payload.isInternal and payload.extraMessage and payload.extraMessage.startswith("<@"):
+        text = payload.extraMessage
+    elif payload.newStatus == "追加オーダー":
         text = f"追加オーダーが登録されました。\n{payload.extraMessage or ''}"
     else:
         text = build_status_update_text(payload)
@@ -793,6 +796,7 @@ async def notify_status_update(
     except Exception as e:
         print(f"Unexpected error on status_update: {e}")
         raise HTTPException(status_code=500, detail="ステータス更新Slack通知で予期せぬエラーが発生しました。")
+
 
 @app.get("/api/shooting_contact/list")
 # main.py の既存の shooting_contact_list をこれに置き換えてください
