@@ -3256,7 +3256,24 @@ ${roleName}：${item.cast.name}`;
         }
       }
 
-      async function createInternalHoldEvents(events) {
+      // 外部オーダー連携メールシートから追加招待メールを取得
+      async function getExternalOrderEmails() {
+        try {
+          const res = await gapi.client.sheets.spreadsheets.values.get({
+            spreadsheetId: SPREADSHEET_ID,
+            range: '外部オーダー連携メール!A:A'
+          });
+          const rows = res.result.values || [];
+          // ヘッダー行を除いて、空でないメールアドレスを取得
+          return rows.slice(1).flat().filter(email => email && email.includes('@'));
+        } catch (e) {
+          console.warn('外部オーダー連携メールの取得に失敗:', e);
+          return [];
+        }
+      }
+
+      async function createInternalHoldEvents(events, additionalEmails = []) {
+
         if (!events || events.length === 0) return;
         if (!INTERNAL_HOLD_CALENDAR_ID) {
           console.warn('INTERNAL_HOLD_CALENDAR_ID が設定されていないため、仮ホールド作成をスキップします。');
@@ -3317,9 +3334,19 @@ ${roleName}：${item.cast.name}`;
             };
           }
 
-          // 内部キャストメールがあれば出席者として招待
+          // 出席者リスト作成（キャストメール＋追加メール）
+          const allAttendees = [];
           if (ev.email) {
-            resource.attendees = [{ email: ev.email }];
+            allAttendees.push({ email: ev.email });
+          }
+          // 追加の連携メールを含める
+          additionalEmails.forEach(email => {
+            if (!allAttendees.some(a => a.email === email)) {
+              allAttendees.push({ email });
+            }
+          });
+          if (allAttendees.length > 0) {
+            resource.attendees = allAttendees;
           }
 
           try {
@@ -5986,9 +6013,18 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
           if (data.calendar_events && data.calendar_events.length > 0) {
             updateProgressBar("カレンダー登録中...", 80);
             console.log("Creating calendar events:", data.calendar_events);
+
+            // 外部案件の場合、連携メールも招待者に追加
+            let additionalEmails = [];
+            if (currentSpecialOrderType === 'external') {
+              additionalEmails = await getExternalOrderEmails();
+              console.log("Additional emails for calendar:", additionalEmails);
+            }
+
             // 既存の関数を使ってカレンダー登録＆シート書き戻し
-            await createInternalHoldEvents(data.calendar_events);
+            await createInternalHoldEvents(data.calendar_events, additionalEmails);
           }
+
 
           updateProgressBar("完了しました", 100);
           await new Promise(r => setTimeout(r, 500));
@@ -6204,6 +6240,12 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
             const accountName = records[0].accountName || '不明';
             const castEmails = [...new Set(records.map(r => r.castEmail).filter(Boolean))];
 
+            // 外部案件の場合、連携メールも取得
+            let additionalEmails = [];
+            if (accountName === '外部案件') {
+              additionalEmails = await getExternalOrderEmails();
+            }
+
             for (const date of dates) {
               const startDateTime = `${date}T${startTime}:00+09:00`;
               const endDateTime = `${date}T${endTime}:00+09:00`;
@@ -6226,9 +6268,17 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
                 end: { dateTime: endDateTime, timeZone: 'Asia/Tokyo' }
               };
 
-              if (castEmails.length > 0) {
-                resource.attendees = castEmails.map(email => ({ email }));
+              // キャストメール＋追加連携メールを招待者に設定
+              const allAttendees = castEmails.map(email => ({ email }));
+              additionalEmails.forEach(email => {
+                if (!allAttendees.some(a => a.email === email)) {
+                  allAttendees.push({ email });
+                }
+              });
+              if (allAttendees.length > 0) {
+                resource.attendees = allAttendees;
               }
+
 
               try {
                 await gapi.client.calendar.events.insert({

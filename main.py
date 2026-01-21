@@ -302,10 +302,31 @@ def build_status_update_text(payload: StatusUpdatePayload) -> str:
     if status == "追加オーダー":
         return f"追加オーダーが登録されました。\n{extra_message or ''}".rstrip()
 
-    base = f"{cast_name}さん、出演{status}でした。"
+    # ステータスに応じた絵文字とフォーマット
+    if status in ["OK", "決定"]:
+        emoji = "✅"
+        formatted_status = "`OK`"
+    elif status == "NG":
+        emoji = "❌"
+        formatted_status = "`NG`"
+    elif status == "条件つきOK":
+        emoji = "🟡"
+        formatted_status = "`条件つきOK`"
+    elif status == "打診中":
+        emoji = "📩"
+        formatted_status = "`打診中`"
+    elif status == "仮キャスティング":
+        emoji = "📋"
+        formatted_status = "`仮キャスティング`"
+    else:
+        emoji = "📋"
+        formatted_status = f"`{status}`"
+
+    base = f"{emoji} {cast_name}さん、出演 {formatted_status} でした。"
     if extra_message:
         return base + "\n" + extra_message
     return base
+
 
 async def sync_to_notion_via_gas(payload: StatusUpdatePayload):
     if not GAS_URL_NOTION_SYNC:
