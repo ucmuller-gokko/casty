@@ -591,19 +591,34 @@
       // APIコールの前に確実にトークンがあるかチェックする関数
       async function ensureAuth() {
         const token = gapi.client.getToken();
-        if (token && token.access_token) return true;
 
-        // トークンがない場合、裏でリフレッシュを試みる
+        // トークンがある場合、実際に有効かテスト（軽量なAPI呼び出し）
+        if (token && token.access_token) {
+          try {
+            // OAuth2 tokeninfo エンドポイントでトークンの有効性を確認
+            const testRes = await fetch(`https://www.googleapis.com/oauth2/v1/tokeninfo?access_token=${token.access_token}`);
+            if (testRes.ok) {
+              return true; // トークンは有効
+            }
+            console.warn('Google token expired or invalid, attempting refresh...');
+          } catch (e) {
+            console.warn('Token validation failed:', e);
+          }
+        }
+
+        // トークンがない、または無効な場合、サーバーからリフレッシュを試みる
         try {
           const res = await fetch('/api/auth/refresh');
           if (res.ok) {
             const data = await res.json();
             gapi.client.setToken({ access_token: data.access_token });
+            console.log('✅ Token refreshed successfully');
             return true;
           }
         } catch (e) {
-          console.error(e);
+          console.error('Token refresh failed:', e);
         }
+
         return false;
       }
 
@@ -6281,11 +6296,38 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
 
 
               try {
-                await gapi.client.calendar.events.insert({
+                const insertRes = await gapi.client.calendar.events.insert({
                   calendarId: calendarId,
                   resource
                 });
-                console.log(`✅ Created new calendar event for ${date}`);
+                const newEventId = insertRes.result.id;
+                console.log(`✅ Created new calendar event for ${date}: ${newEventId}`);
+
+                // 新しいイベントIDを該当レコードのO列に保存
+                if (newEventId && records.length > 0) {
+                  // 各レコードの行番号を取得してイベントIDを保存
+                  const calUpdates = records
+                    .filter(r => r.rowNumber)
+                    .map(r => ({
+                      range: `キャスティングリスト!O${r.rowNumber}`,
+                      values: [[newEventId]]
+                    }));
+
+                  if (calUpdates.length > 0) {
+                    try {
+                      await gapi.client.sheets.spreadsheets.values.batchUpdate({
+                        spreadsheetId: SPREADSHEET_ID,
+                        resource: {
+                          valueInputOption: 'USER_ENTERED',
+                          data: calUpdates
+                        }
+                      });
+                      console.log(`✅ Updated calendar event IDs in sheet for ${calUpdates.length} records`);
+                    } catch (sheetErr) {
+                      console.error('Failed to update calendar event IDs in sheet:', sheetErr);
+                    }
+                  }
+                }
               } catch (createErr) {
                 console.error('Failed to create calendar event:', createErr);
               }
