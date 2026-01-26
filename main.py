@@ -819,6 +819,90 @@ async def notify_status_update(
         raise HTTPException(status_code=500, detail="ステータス更新Slack通知で予期せぬエラーが発生しました。")
 
 
+class SlackThreadSearchPayload(BaseModel):
+    projectId: str
+    channel: Optional[str] = None
+
+@app.post("/api/slack/search_thread")
+async def search_slack_thread(payload: SlackThreadSearchPayload):
+    """
+    NotionリンクでSlackスレッドを検索し、thread_tsを返す
+    """
+    if not slack_client:
+        raise HTTPException(status_code=500, detail="Slackクライアントが初期化されていません")
+    
+    # Notion Page IDからハイフンを除去してリンクの一部を作成
+    notion_id_clean = payload.projectId.replace("-", "")
+    search_query = f"notion.so/{notion_id_clean}"
+    
+    # 検索対象のチャンネルを決定
+    channels_to_search = []
+    if payload.channel:
+        channels_to_search.append(payload.channel)
+    else:
+        # デフォルトで主要チャンネルを検索
+        if SLACK_CHANNEL_TYPE_A:
+            channels_to_search.append(SLACK_CHANNEL_TYPE_A)
+        if SLACK_CHANNEL_TYPE_B:
+            channels_to_search.append(SLACK_CHANNEL_TYPE_B)
+        if SLACK_CHANNEL_EXTERNAL:
+            channels_to_search.append(SLACK_CHANNEL_EXTERNAL)
+        if SLACK_DEFAULT_CHANNEL and SLACK_DEFAULT_CHANNEL not in channels_to_search:
+            channels_to_search.append(SLACK_DEFAULT_CHANNEL)
+    
+    print(f"🔍 Searching Slack for: {search_query} in channels: {channels_to_search}")
+    
+    for channel in channels_to_search:
+        try:
+            # conversations.historyでメッセージを取得（最新100件）
+            result = await slack_client.conversations_history(
+                channel=channel,
+                limit=100
+            )
+            
+            messages = result.get("messages", [])
+            for msg in messages:
+                text = msg.get("text", "")
+                # Notionリンクがメッセージかアタッチメントにあるかチェック
+                if notion_id_clean in text:
+                    ts = msg.get("ts")
+                    if ts:
+                        # permalinkを取得
+                        try:
+                            perm = await slack_client.chat_getPermalink(channel=channel, message_ts=ts)
+                            permalink = perm.get("permalink", "")
+                        except:
+                            permalink = ""
+                        
+                        print(f"✅ Found thread: ts={ts}, permalink={permalink}")
+                        return {"ok": True, "ts": ts, "permalink": permalink, "channel": channel}
+                
+                # アタッチメント内も検索
+                for att in msg.get("attachments", []):
+                    att_text = att.get("text", "") + att.get("fallback", "")
+                    if notion_id_clean in att_text:
+                        ts = msg.get("ts")
+                        if ts:
+                            try:
+                                perm = await slack_client.chat_getPermalink(channel=channel, message_ts=ts)
+                                permalink = perm.get("permalink", "")
+                            except:
+                                permalink = ""
+                            
+                            print(f"✅ Found thread in attachment: ts={ts}")
+                            return {"ok": True, "ts": ts, "permalink": permalink, "channel": channel}
+                            
+        except SlackApiError as e:
+            print(f"⚠️ Slack search in {channel} failed: {e.response['error']}")
+            continue
+        except Exception as e:
+            print(f"⚠️ Unexpected error searching {channel}: {e}")
+            continue
+    
+    print(f"❌ Thread not found for projectId: {payload.projectId}")
+    return {"ok": False, "ts": None, "permalink": None}
+
+
 @app.get("/api/shooting_contact/list")
 # main.py の既存の shooting_contact_list をこれに置き換えてください
 
