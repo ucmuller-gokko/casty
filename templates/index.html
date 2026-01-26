@@ -1662,12 +1662,52 @@
           await updateCalendarEventOnStatusChange(rec, newStatus, targetRow);
 
           // ===== Slack 通知ロジック =====
+          // ★追加: slackThreadTsが空の場合、Slack APIで検索を試みる
+          if (!rec.slackThreadTs && rec.projectId) {
+            console.log("slackThreadTs empty, searching Slack for thread...");
+            try {
+              const searchRes = await fetch('/api/slack/search_thread', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ projectId: rec.projectId })
+              });
+              if (searchRes.ok) {
+                const searchData = await searchRes.json();
+                if (searchData.ok && searchData.ts) {
+                  console.log("✅ Found thread via Slack search:", searchData.ts);
+                  rec.slackThreadTs = searchData.ts;
+                  rec.slackPermalink = searchData.permalink || '';
+
+                  // シートにも保存
+                  try {
+                    await gapi.client.sheets.spreadsheets.values.batchUpdate({
+                      spreadsheetId: SPREADSHEET_ID,
+                      resource: {
+                        valueInputOption: 'USER_ENTERED',
+                        data: [
+                          { range: `キャスティングリスト!L${targetRow}`, values: [[rec.slackThreadTs]] },
+                          { range: `キャスティングリスト!M${targetRow}`, values: [[rec.slackPermalink]] }
+                        ]
+                      }
+                    });
+                    console.log("✅ Updated slackThreadTs in sheet");
+                  } catch (sheetErr) {
+                    console.error("Failed to update slackThreadTs in sheet:", sheetErr);
+                  }
+                }
+              }
+            } catch (e) {
+              console.error("Slack thread search failed:", e);
+            }
+          }
+
           // 内部/外部フラグ（rec.isInternal プロパティを使用）
           const isInternalCast = rec.isInternal;
           const isExternal = !isInternalCast;
 
           const isFromDashing = (prevStatus === '打診中');
           const isFinal = ['決定', 'NG', '条件つきOK'].includes(newStatus);
+
 
           // 外部キャストかつ、「打診中」→「最終ステータス」への変更時のみ通知
           if (isExternal && isFromDashing && isFinal && rec.slackThreadTs) {
@@ -5020,19 +5060,112 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
         let isAdditional = !!targetThreadTs; // 明示的に渡された場合は追加扱い
 
         // スレッドIDが未指定だが、ProjectID (=PageID) がある場合 -> 過去ログを検索
-        // Note: processNewOrderFromModal passes 'pageId', not 'projectId'
         const searchProjectId = data.projectId || data.pageId;
 
         if (!targetThreadTs && searchProjectId) {
-          // castingDataから「同じProjectID」かつ「スレッドIDを持っている」レコードを探す
+          // 1. まずメモリ上のcastingDataから検索
           const existingRecord = castingData.find(c =>
             c.projectId === searchProjectId && c.slackThreadTs
           );
 
           if (existingRecord) {
-            console.log("Found existing thread for ProjectID:", searchProjectId, existingRecord.slackThreadTs);
+            console.log("Found existing thread in memory:", searchProjectId, existingRecord.slackThreadTs);
             targetThreadTs = existingRecord.slackThreadTs;
-            isAdditional = true; // 自動引き当て成功 -> 追加オーダー扱い
+            isAdditional = true;
+          } else {
+            // 2. メモリにない場合、スプレッドシートから最新データを取得して検索
+            console.log("Thread not found in memory, checking sheet for ProjectID:", searchProjectId);
+            try {
+              const sheetRes = await gapi.client.sheets.spreadsheets.values.get({
+                spreadsheetId: SPREADSHEET_ID,
+                range: 'キャスティングリスト!A2:P' // P列（projectId）まで取得
+              });
+              const sheetRows = sheetRes.result.values || [];
+
+              for (const row of sheetRows) {
+                const rowProjectId = row[15] || ''; // P列 = projectId
+                let rowSlackThreadTs = row[11] || ''; // L列 = slackThreadTs
+                const rowSlackPermalink = row[12] || ''; // M列 = slackPermalink
+
+                // slackThreadTsが空でもpermalinkから抽出可能
+                if (!rowSlackThreadTs && rowSlackPermalink) {
+                  const m = rowSlackPermalink.match(/p(\d{16})/);
+                  if (m) {
+                    rowSlackThreadTs = m[1].slice(0, 10) + "." + m[1].slice(10);
+                  }
+                }
+
+                if (rowProjectId === searchProjectId && rowSlackThreadTs) {
+                  console.log("Found existing thread in sheet:", searchProjectId, rowSlackThreadTs);
+                  targetThreadTs = rowSlackThreadTs;
+                  isAdditional = true;
+                  break;
+                }
+              }
+            } catch (e) {
+              console.error("Failed to check sheet for existing thread:", e);
+            }
+          }
+
+          // 3. シートにもない場合、Slack APIで検索（NotionリンクでSlackメッセージを探す）
+          if (!targetThreadTs && searchProjectId) {
+            console.log("Thread not found in sheet, searching Slack for ProjectID:", searchProjectId);
+            try {
+              const searchRes = await fetch('/api/slack/search_thread', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ projectId: searchProjectId })
+              });
+              if (searchRes.ok) {
+                const searchData = await searchRes.json();
+                if (searchData.ok && searchData.ts) {
+                  console.log("✅ Found thread via Slack search:", searchData.ts);
+                  targetThreadTs = searchData.ts;
+                  isAdditional = true;
+
+                  // ★追加: 同じProjectIDを持つ既存レコードのslackThreadTsも一括更新
+                  try {
+                    const sheetRowsForUpdate = sheetRows || [];
+                    const updateData = [];
+                    for (let i = 0; i < sheetRowsForUpdate.length; i++) {
+                      const row = sheetRowsForUpdate[i];
+                      const rowProjectId = row[15] || '';
+                      const rowSlackThreadTs = row[11] || '';
+
+                      // 同じprojectIdでslackThreadTsが空のレコードを更新
+                      if (rowProjectId === searchProjectId && !rowSlackThreadTs) {
+                        const sheetRowNum = i + 2; // ヘッダー行 + 1-indexed
+                        updateData.push({
+                          range: `キャスティングリスト!L${sheetRowNum}`,
+                          values: [[searchData.ts]]
+                        });
+                        if (searchData.permalink) {
+                          updateData.push({
+                            range: `キャスティングリスト!M${sheetRowNum}`,
+                            values: [[searchData.permalink]]
+                          });
+                        }
+                      }
+                    }
+
+                    if (updateData.length > 0) {
+                      await gapi.client.sheets.spreadsheets.values.batchUpdate({
+                        spreadsheetId: SPREADSHEET_ID,
+                        resource: {
+                          valueInputOption: 'USER_ENTERED',
+                          data: updateData
+                        }
+                      });
+                      console.log(`✅ Updated ${updateData.length / 2} existing records with found slackThreadTs`);
+                    }
+                  } catch (updateErr) {
+                    console.error("Failed to update existing records:", updateErr);
+                  }
+                }
+              }
+            } catch (e) {
+              console.error("Slack thread search failed:", e);
+            }
           }
         }
         // ★★★ 追加ここまで ★★★
@@ -5086,23 +5219,30 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
 
         let slackThreadTs = '';
         let slackPermalink = '';
+        let slackNotificationFailed = false;
 
         updateProgressBar("Slackに通知を送信中...", 30);
 
+        // Slack通知（1回のみ試行 - リトライすると重複メッセージの原因になる）
         try {
           const slackRes = await fetch('/api/notify/order_created', {
             method: 'POST',
             body: formData
           });
 
-          if (!slackRes.ok) throw new Error('Slack notification failed');
+          if (!slackRes.ok) {
+            throw new Error(`Slack API returned ${slackRes.status}`);
+          }
           const slackData = await slackRes.json();
 
           // 追加オーダーの場合は元のスレッドIDを維持、新規なら新しいIDを採用
           slackThreadTs = data.slackThreadTs || slackData.ts;
           slackPermalink = slackData.permalink;
+          console.log("✅ Slack notification succeeded");
         } catch (e) {
-          console.error("Slack notification error:", e);
+          console.error("Slack notification failed:", e);
+          slackNotificationFailed = true;
+          showMessage('⚠️ Slack通知に失敗しました。スプレッドシートへの保存は続行されます。手動でSlackを確認してください。', 'warning');
         }
 
         updateProgressBar("スプレッドシートに書き込み中...", 60);
