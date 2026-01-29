@@ -681,7 +681,7 @@
           const res = await gapi.client.sheets.spreadsheets.values.batchGet({
             spreadsheetId: SPREADSHEET_ID,
             ranges: [
-              'キャストリスト!A2:N',
+              'キャストリスト!A2:O',
               'キャスティングリスト!A2:T',
               '権限管理リスト!A2:B',
               '撮影スケ_キャスト!A2:Z', // 修正: 範囲を広めに確保
@@ -724,6 +724,7 @@
               const snsX = row[11]?.trim() || '';
               const snsInsta = row[12]?.trim() || '';
               const snsTiktok = row[13]?.trim() || '';
+              const furigana = row[14]?.trim() || '';
 
               return {
                 castId: id, name, gender, dateOfBirth: dob, age: dob ? calculateAge(dob) : null,
@@ -732,7 +733,8 @@
                 isInternal,
                 internalType: castType,
                 slackMentionId,
-                snsX, snsInsta, snsTiktok
+                snsX, snsInsta, snsTiktok,
+                furigana
               };
             });
 
@@ -1188,7 +1190,7 @@
 
         const filtered = castData.filter(c => {
           if (kw) {
-            const hay = `${c.name || ''}\n${c.agency || ''}\n${c.notes || ''}`.toLowerCase();
+            const hay = `${c.name || ''}\n${c.agency || ''}\n${c.notes || ''}\n${c.furigana || ''}`.toLowerCase();
             if (!hay.includes(kw)) return false;
           }
           if (m || f) {
