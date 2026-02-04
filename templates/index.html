@@ -321,6 +321,10 @@
       let shootingContactRows = [];
       let INTERNAL_HOLD_CALENDAR_ID = '';
 
+      // ========= Bulk Selection Mode =========
+      let bulkSelectMode = false;        // 一括選択モードのON/OFF
+      let bulkSelectedIds = new Set();   // 選択されたcastingId群
+
       const loader = document.getElementById('loader');
 
       // ========= Helpers =========
@@ -1261,8 +1265,32 @@
                 <span>過去を表示</span>
               </label>
               <button id="status-reload" class="px-2 py-1 rounded border bg-white text-sm">再読込</button>
+              ${isAdmin ? `
+              <button id="bulk-select-toggle" class="px-3 py-1 rounded border text-sm font-medium transition-colors ${bulkSelectMode ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 hover:bg-gray-50'}">
+                ${bulkSelectMode ? '✓ 一括選択中' : '☐ 一括選択'}
+              </button>
+              ` : ''}
             </div>
-          </div>`;
+          </div>
+          ${bulkSelectMode && isAdmin ? `
+          <div id="bulk-action-bar" class="flex items-center gap-3 mb-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
+            <span class="text-sm font-medium text-blue-800">
+              <span id="bulk-select-count">${bulkSelectedIds.size}</span>件選択中
+            </span>
+            <button id="bulk-delete-btn" class="px-3 py-1.5 bg-red-600 text-white rounded text-sm font-medium hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed" ${bulkSelectedIds.size === 0 ? 'disabled' : ''}>
+              🗑️ 一括削除
+            </button>
+            <button id="bulk-status-btn" class="px-3 py-1.5 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed" ${bulkSelectedIds.size === 0 ? 'disabled' : ''}>
+              📝 一括ステータス更新
+            </button>
+            <button id="bulk-select-all-btn" class="px-3 py-1.5 bg-gray-600 text-white rounded text-sm font-medium hover:bg-gray-700">
+              全選択
+            </button>
+            <button id="bulk-clear-btn" class="px-3 py-1.5 border border-gray-300 text-gray-700 rounded text-sm font-medium hover:bg-gray-50">
+              選択解除
+            </button>
+          </div>
+          ` : ''}`;
 
         // const ORDER_WAIT_STATUSES = ['オーダー待ち', 'オーダー待ち（仮キャスティング）']; // Moved to global scope
 
@@ -1453,7 +1481,15 @@
                   }
 
                   return `
-                <tr class="border-b hover:bg-gray-50 casting-row ${rowMutedClass}" data-casting-id="${it.castingId}">
+                <tr class="border-b hover:bg-gray-50 casting-row ${rowMutedClass} ${bulkSelectMode && bulkSelectedIds.has(it.castingId) ? 'bg-blue-50' : ''}" data-casting-id="${it.castingId}">
+                  ${bulkSelectMode ? `
+                  <td class="py-2 px-2 text-center">
+                    <input type="checkbox" class="bulk-select-checkbox w-4 h-4 text-blue-600 rounded focus:ring-blue-500" 
+                           data-casting-id="${it.castingId}" 
+                           ${bulkSelectedIds.has(it.castingId) ? 'checked' : ''}
+                           onclick="event.stopPropagation(); toggleBulkSelect('${it.castingId}')">
+                  </td>
+                  ` : ''}
                   <td class="py-2 px-2">${it.roleName || '-'}</td>
                   <td class="py-2 px-2 text-center">${it.rank || '-'}</td>
                   <td class="py-2 px-2 text-center">${it.mainSub || '-'}</td>
@@ -1470,6 +1506,7 @@
                 <table class="min-w-full text-sm table-fixed">
                   <thead class="bg-gray-100">
                     <tr>
+                      ${bulkSelectMode ? '<th class="text-center py-2 px-2 w-10">選択</th>' : ''}
                       <th class="text-left py-2 px-2 w-24">役名</th>
                       <th class="text-center py-2 px-2 w-12">役候補</th>
                       <th class="text-center py-2 px-2 w-16">区分</th>
@@ -1542,6 +1579,237 @@
             });
           });
         }
+
+        // ========= Bulk Selection Event Handlers =========
+        view.querySelector('#bulk-select-toggle')?.addEventListener('click', () => {
+          toggleBulkSelectMode();
+        });
+
+        view.querySelector('#bulk-delete-btn')?.addEventListener('click', async () => {
+          await bulkDeleteOrders();
+        });
+
+        view.querySelector('#bulk-status-btn')?.addEventListener('click', () => {
+          openBulkStatusModal();
+        });
+
+        view.querySelector('#bulk-select-all-btn')?.addEventListener('click', () => {
+          // 表示中の全てのcastingIdを選択
+          view.querySelectorAll('.casting-row').forEach(row => {
+            const id = row.getAttribute('data-casting-id');
+            if (id) bulkSelectedIds.add(id);
+          });
+          renderCastingStatusView(false);
+        });
+
+        view.querySelector('#bulk-clear-btn')?.addEventListener('click', () => {
+          bulkSelectedIds.clear();
+          renderCastingStatusView(false);
+        });
+      }
+
+      // ========= Bulk Selection Functions =========
+
+      function toggleBulkSelectMode() {
+        bulkSelectMode = !bulkSelectMode;
+        if (!bulkSelectMode) {
+          bulkSelectedIds.clear(); // モード解除時は選択もクリア
+        }
+        renderCastingStatusView(false);
+      }
+      window.toggleBulkSelectMode = toggleBulkSelectMode;
+
+      function toggleBulkSelect(castingId) {
+        if (bulkSelectedIds.has(castingId)) {
+          bulkSelectedIds.delete(castingId);
+        } else {
+          bulkSelectedIds.add(castingId);
+        }
+        // 選択件数の表示を更新
+        const countEl = document.getElementById('bulk-select-count');
+        if (countEl) countEl.textContent = bulkSelectedIds.size;
+
+        // ボタンの有効/無効を更新
+        const deleteBtn = document.getElementById('bulk-delete-btn');
+        const statusBtn = document.getElementById('bulk-status-btn');
+        if (deleteBtn) deleteBtn.disabled = bulkSelectedIds.size === 0;
+        if (statusBtn) statusBtn.disabled = bulkSelectedIds.size === 0;
+
+        // 行のハイライトを更新
+        const row = document.querySelector(`.casting-row[data-casting-id="${castingId}"]`);
+        if (row) {
+          row.classList.toggle('bg-blue-50', bulkSelectedIds.has(castingId));
+        }
+      }
+      window.toggleBulkSelect = toggleBulkSelect;
+
+      async function bulkDeleteOrders() {
+        if (!isAdmin) { showMessage('権限がありません。', 'error'); return; }
+        if (bulkSelectedIds.size === 0) { showMessage('削除するオーダーを選択してください。', 'error'); return; }
+
+        const ids = Array.from(bulkSelectedIds);
+        const confirmed = confirm(`${ids.length}件のオーダーを削除しますか？\nこの操作は取り消せません。`);
+        if (!confirmed) return;
+
+        showProgressBar('一括削除を実行中...', 0);
+        let successCount = 0;
+        let errorCount = 0;
+
+        for (let i = 0; i < ids.length; i++) {
+          const castingId = ids[i];
+          const rec = castingData.find(c => c.castingId === castingId);
+          if (!rec) {
+            errorCount++;
+            continue;
+          }
+
+          try {
+            // バックエンドAPI呼び出し
+            const res = await fetch('/api/order/delete', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                castingId: rec.castingId,
+                slackThreadTs: rec.slackThreadTs || ''
+              })
+            });
+
+            if (!res.ok) throw new Error('削除失敗');
+
+            // カレンダーイベント削除
+            if (rec.calendarEventId && INTERNAL_HOLD_CALENDAR_ID) {
+              try {
+                await gapi.client.calendar.events.delete({
+                  calendarId: INTERNAL_HOLD_CALENDAR_ID,
+                  eventId: rec.calendarEventId
+                });
+              } catch (e) {
+                if (!(e && e.status === 404)) console.error('カレンダー削除失敗:', e);
+              }
+            }
+
+            rec.status = '削除済み';
+            successCount++;
+          } catch (e) {
+            console.error(`削除エラー (${castingId}):`, e);
+            errorCount++;
+          }
+
+          const percent = Math.round(((i + 1) / ids.length) * 100);
+          updateProgressBar(`${i + 1}/${ids.length}件処理中...`, percent);
+        }
+
+        hideProgressBar();
+        bulkSelectedIds.clear();
+        bulkSelectMode = false;
+
+        if (errorCount > 0) {
+          showMessage(`${successCount}件削除、${errorCount}件失敗`, 'error');
+        } else {
+          showMessage(`${successCount}件のオーダーを削除しました。`, 'success');
+        }
+
+        await renderCastingStatusView(false);
+        displayAvailableCasts();
+      }
+
+      function openBulkStatusModal() {
+        if (!isAdmin) { showMessage('権限がありません。', 'error'); return; }
+        if (bulkSelectedIds.size === 0) { showMessage('更新するオーダーを選択してください。', 'error'); return; }
+
+        const modal = document.getElementById('status-quick-modal');
+        if (!modal) return;
+
+        modal.innerHTML = `
+          <div class="bg-white rounded-lg shadow-xl max-w-md w-full p-5">
+            <div class="flex items-center justify-between mb-3">
+              <h3 class="text-lg font-bold">一括ステータス更新</h3>
+              <button id="bulk-status-close" class="text-gray-600 hover:text-gray-800 text-2xl">&times;</button>
+            </div>
+            
+            <div class="text-sm text-gray-700 mb-4 border-b pb-3">
+              <div class="font-medium text-blue-800">${bulkSelectedIds.size}件のオーダーを更新</div>
+            </div>
+
+            <div class="space-y-3 text-sm">
+              <div>
+                <label class="block text-xs font-medium text-gray-600 mb-1">新しいステータス</label>
+                <select id="bulk-new-status" class="w-full border rounded px-3 py-2 text-sm">
+                  <option value="">選択してください</option>
+                  <option value="仮キャスティング">仮キャスティング</option>
+                  <option value="仮押さえ">仮押さえ</option>
+                  <option value="オーダー待ち">オーダー待ち</option>
+                  <option value="打診中">打診中</option>
+                  <option value="OK">OK</option>
+                  <option value="決定">決定</option>
+                  <option value="条件つきOK">条件つきOK</option>
+                  <option value="NG">NG</option>
+                  <option value="キャンセル">キャンセル</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="flex justify-end gap-3 mt-6">
+              <button id="bulk-status-cancel" class="px-4 py-2 border rounded hover:bg-gray-50 text-sm">キャンセル</button>
+              <button id="bulk-status-confirm" class="px-6 py-2 bg-indigo-600 text-white font-bold rounded hover:bg-indigo-700 text-sm disabled:opacity-50" disabled>一括更新</button>
+            </div>
+          </div>
+        `;
+
+        modal.classList.remove('hidden');
+
+        modal.querySelector('#bulk-status-close')?.addEventListener('click', () => modal.classList.add('hidden'));
+        modal.querySelector('#bulk-status-cancel')?.addEventListener('click', () => modal.classList.add('hidden'));
+
+        const selectEl = modal.querySelector('#bulk-new-status');
+        const confirmBtn = modal.querySelector('#bulk-status-confirm');
+
+        selectEl?.addEventListener('change', () => {
+          if (confirmBtn) confirmBtn.disabled = !selectEl.value;
+        });
+
+        confirmBtn?.addEventListener('click', async () => {
+          const newStatus = selectEl.value;
+          if (!newStatus) return;
+          modal.classList.add('hidden');
+          await bulkUpdateStatus(newStatus);
+        });
+      }
+
+      async function bulkUpdateStatus(newStatus) {
+        if (!isAdmin) { showMessage('権限がありません。', 'error'); return; }
+        if (bulkSelectedIds.size === 0) return;
+
+        const ids = Array.from(bulkSelectedIds);
+        showProgressBar('一括ステータス更新中...', 0);
+        let successCount = 0;
+        let errorCount = 0;
+
+        for (let i = 0; i < ids.length; i++) {
+          const castingId = ids[i];
+          try {
+            await changeCastingStatus(castingId, newStatus, '');
+            successCount++;
+          } catch (e) {
+            console.error(`ステータス更新エラー (${castingId}):`, e);
+            errorCount++;
+          }
+
+          const percent = Math.round(((i + 1) / ids.length) * 100);
+          updateProgressBar(`${i + 1}/${ids.length}件処理中...`, percent);
+        }
+
+        hideProgressBar();
+        bulkSelectedIds.clear();
+        bulkSelectMode = false;
+
+        if (errorCount > 0) {
+          showMessage(`${successCount}件更新、${errorCount}件失敗`, 'error');
+        } else {
+          showMessage(`${successCount}件のステータスを「${newStatus}」に更新しました。`, 'success');
+        }
+
+        await renderCastingStatusView(false);
       }
 
       // ==== Admin: status change & edit ====
