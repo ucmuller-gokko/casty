@@ -288,6 +288,7 @@
       // ========= Config =========
       const CLIENT_ID = document.querySelector('meta[name="google-client-id"]')?.content || '';
       const SPREADSHEET_ID = document.querySelector('meta[name="spreadsheet-id"]')?.content || '';
+      window.SPREADSHEET_ID = SPREADSHEET_ID; // グローバルに公開（特別オーダー編集から参照）
       const API_KEY = document.querySelector('meta[name="google-api-key"]')?.content || '';
       const DISCOVERY_DOCS = [
         "https://sheets.googleapis.com/$discovery/rest?version=v4",
@@ -868,6 +869,7 @@
 
           // 外部関数から参照できるようにする
           window.castingData = castingData;
+          window.castData = castData;
           window.isAdmin = isAdmin;
 
           renderCalendar();
@@ -1299,8 +1301,11 @@
           // 削除済みは表示しない
           if (c.status === '削除済み') continue;
           if (!c.startDate || !c.endDate) continue;
-          const from = new Date(c.startDate);
-          const to = new Date(c.endDate);
+          // ★修正: new Date("YYYY-MM-DD") はUTC解釈されるため、ローカルタイムで生成する
+          const fromParts = c.startDate.split('-').map(Number);
+          const toParts = c.endDate.split('-').map(Number);
+          const from = new Date(fromParts[0], fromParts[1] - 1, fromParts[2]);
+          const to = new Date(toParts[0], toParts[1] - 1, toParts[2]);
           let d = new Date(Math.max(from, monthStart));
           const lastDayInScope = new Date(Math.min(to, monthEnd));
 
@@ -3506,45 +3511,48 @@ ${roleName}：${item.cast.name}`;
           }
 
           if (slackTs && slackLink) {
-            const updatedRange = appendResult.result.updates.updatedRange;
-            const match = updatedRange.match(/!A(\d+):/);
-            if (match) {
-              const startRow = parseInt(match[1], 10);
+            // ★修正: appendから得た行番号ではなく、castingIdでシートを再検索
+            try {
+              const sheetRes = await gapi.client.sheets.spreadsheets.values.get({
+                spreadsheetId: SPREADSHEET_ID,
+                range: 'キャスティングリスト!A2:A'
+              });
+              const aColValues = sheetRes.result.values || [];
+              const castingIdToRow = new Map();
+              for (let i = 0; i < aColValues.length; i++) {
+                if (aColValues[i][0]) castingIdToRow.set(aColValues[i][0], i + 2);
+              }
 
-              // 1) castingId ごとのシート行番号をマッピング
-              const rowNumberByCastingId = new Map();
-              for (let i = 0; i < values.length; i++) {
-                const castingId = values[i][0]; // A列
-                const rowNum = startRow + i;
-                if (castingId) {
-                  rowNumberByCastingId.set(castingId, rowNum);
+              // Slack の L/M 列更新
+              const updates = [];
+              for (const row of values) {
+                const cid = row[0]; // A列 = castingId
+                const rowNum = castingIdToRow.get(cid);
+                if (rowNum) {
+                  updates.push({
+                    range: `キャスティングリスト!L${rowNum}`,
+                    values: [[`'${slackTs}`]],
+                  });
+                  updates.push({
+                    range: `キャスティングリスト!M${rowNum}`,
+                    values: [[slackLink]],
+                  });
                 }
               }
 
-              // 2) Slack の L/M 列更新
-              const updates = [];
-              for (let i = 0; i < values.length; i++) {
-                const rowNum = startRow + i;
-                // 先頭に ' を付けてテキストとして保存（小数点以下を保持するため）
-                updates.push({
-                  range: `キャスティングリスト!L${rowNum}`,
-                  values: [[`'${slackTs}`]],
-                });
-                updates.push({
-                  range: `キャスティングリスト!M${rowNum}`,
-                  values: [[slackLink]],
+              if (updates.length > 0) {
+                await gapi.client.sheets.spreadsheets.values.batchUpdate({
+                  spreadsheetId: SPREADSHEET_ID,
+                  resource: { valueInputOption: 'USER_ENTERED', data: updates }
                 });
               }
 
-              await gapi.client.sheets.spreadsheets.values.batchUpdate({
-                spreadsheetId: SPREADSHEET_ID,
-                resource: { valueInputOption: 'USER_ENTERED', data: updates }
-              });
-
-              // 3) internalEvents に行番号を埋める
+              // internalEvents に行番号を埋める（再検索結果を使用）
               internalEvents.forEach(ev => {
-                ev.rowNumber = rowNumberByCastingId.get(ev.castingId) || null;
+                ev.rowNumber = castingIdToRow.get(ev.castingId) || null;
               });
+            } catch (e) {
+              console.error('Slack情報の書き込みに失敗:', e);
             }
           }
 
@@ -3596,6 +3604,7 @@ ${roleName}：${item.cast.name}`;
           return [];
         }
       }
+      window.getExternalOrderEmails = getExternalOrderEmails; // グローバルに公開（特別オーダー編集から参照）
 
       async function createInternalHoldEvents(events, additionalEmails = []) {
 
@@ -3681,10 +3690,10 @@ ${roleName}：${item.cast.name}`;
             });
 
             const eventId = res.result.id;
-            if (eventId && ev.rowNumber) {
+            if (eventId && ev.castingId) {
               calUpdates.push({
-                range: `キャスティングリスト!O${ev.rowNumber}`, // O列: calendarEventId
-                values: [[eventId]],
+                castingId: ev.castingId,
+                eventId: eventId,
               });
             }
           } catch (e) {
@@ -3693,16 +3702,42 @@ ${roleName}：${item.cast.name}`;
           }
         }
 
-        // まとめて N 列に eventId を書き戻し
+        // まとめて O 列に eventId を書き戻し（★修正: castingIdでシートを再検索して行番号を取得）
         if (calUpdates.length) {
           try {
-            await gapi.client.sheets.spreadsheets.values.batchUpdate({
+            // シートからA列を取得して行番号をマッピング
+            const sheetRes = await gapi.client.sheets.spreadsheets.values.get({
               spreadsheetId: SPREADSHEET_ID,
-              resource: {
-                valueInputOption: 'USER_ENTERED',
-                data: calUpdates,
-              },
+              range: 'キャスティングリスト!A2:A'
             });
+            const aColValues = sheetRes.result.values || [];
+            const castingIdToRow = new Map();
+            for (let i = 0; i < aColValues.length; i++) {
+              if (aColValues[i][0]) castingIdToRow.set(aColValues[i][0], i + 2);
+            }
+
+            const batchData = [];
+            for (const upd of calUpdates) {
+              const rowNum = castingIdToRow.get(upd.castingId);
+              if (rowNum) {
+                batchData.push({
+                  range: `キャスティングリスト!O${rowNum}`,
+                  values: [[upd.eventId]],
+                });
+              } else {
+                console.warn(`castingId "${upd.castingId}" がシートに見つかりません。カレンダーIDの保存をスキップします。`);
+              }
+            }
+
+            if (batchData.length > 0) {
+              await gapi.client.sheets.spreadsheets.values.batchUpdate({
+                spreadsheetId: SPREADSHEET_ID,
+                resource: {
+                  valueInputOption: 'USER_ENTERED',
+                  data: batchData,
+                },
+              });
+            }
           } catch (e) {
             console.error('calendarEventId の書き込みに失敗:', e);
           }
@@ -5445,7 +5480,7 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
           accountName: data.accountName,
           projectName: uniqueProjectNames,
           projectId: data.pageId,
-          dateRanges: [shootDate],
+          dateRanges: (selectedDates && selectedDates.length > 0) ? selectedDates : [shootDate],
           orders: allOrders.map(o => ({
             castingId: o.castingId,
             roleName: o.roleName,
@@ -6663,13 +6698,24 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
 
           if (records.length > 0) {
             const accountName = records[0].accountName || '不明';
-            const castEmails = [...new Set(records.map(r => r.castEmail).filter(Boolean))];
+            // castingDataのemailが空の場合、castData（キャストマスター）からメール取得
+            const castDataList = window.castData || [];
+            const castDataMap = new Map(castDataList.map(c => [c.castId, c]));
+            const castEmails = [...new Set(records.map(r => {
+              // まずcastingDataのemailを試す
+              if (r.email) return r.email;
+              // 空の場合、castDataからcastIdで検索
+              const castInfo = castDataMap.get(r.castId);
+              return castInfo?.email || '';
+            }).filter(Boolean))];
+            console.log('📧 Cast emails found:', castEmails, 'from records:', records.map(r => ({ castingId: r.castingId, castId: r.castId, email: r.email, castName: r.castName })));
 
             // 外部案件の場合、連携メールも取得
             let additionalEmails = [];
             if (accountName === '外部案件') {
-              additionalEmails = await getExternalOrderEmails();
+              additionalEmails = await window.getExternalOrderEmails();
             }
+            console.log('📧 Additional emails:', additionalEmails);
 
             for (const date of dates) {
               const startDateTime = `${date}T${startTime}:00+09:00`;
@@ -6703,28 +6749,39 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
               if (allAttendees.length > 0) {
                 resource.attendees = allAttendees;
               }
-
+              console.log('📧 Final attendees for', date, ':', allAttendees);
 
               try {
                 const insertRes = await gapi.client.calendar.events.insert({
                   calendarId: calendarId,
-                  resource
+                  resource,
+                  sendUpdates: 'all'  // 招待メールを送信
                 });
                 const newEventId = insertRes.result.id;
                 console.log(`✅ Created new calendar event for ${date}: ${newEventId}`);
 
-                // 新しいイベントIDを該当レコードのO列に保存
+                // 新しいイベントIDを該当レコードのO列に保存（★修正: castingIdで行番号を再検索）
                 if (newEventId && records.length > 0) {
-                  // 各レコードの行番号を取得してイベントIDを保存
-                  const calUpdates = records
-                    .filter(r => r.rowNumber)
-                    .map(r => ({
-                      range: `キャスティングリスト!O${r.rowNumber}`,
-                      values: [[newEventId]]
-                    }));
+                  try {
+                    // シートからA列を取得して行番号をマッピング
+                    const sheetRes = await gapi.client.sheets.spreadsheets.values.get({
+                      spreadsheetId: SPREADSHEET_ID,
+                      range: 'キャスティングリスト!A2:A'
+                    });
+                    const aColValues = sheetRes.result.values || [];
+                    const castingIdToRow = new Map();
+                    for (let k = 0; k < aColValues.length; k++) {
+                      if (aColValues[k][0]) castingIdToRow.set(aColValues[k][0], k + 2);
+                    }
 
-                  if (calUpdates.length > 0) {
-                    try {
+                    const calUpdates = records
+                      .filter(r => castingIdToRow.has(r.castingId))
+                      .map(r => ({
+                        range: `キャスティングリスト!O${castingIdToRow.get(r.castingId)}`,
+                        values: [[newEventId]]
+                      }));
+
+                    if (calUpdates.length > 0) {
                       await gapi.client.sheets.spreadsheets.values.batchUpdate({
                         spreadsheetId: SPREADSHEET_ID,
                         resource: {
@@ -6733,9 +6790,9 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
                         }
                       });
                       console.log(`✅ Updated calendar event IDs in sheet for ${calUpdates.length} records`);
-                    } catch (sheetErr) {
-                      console.error('Failed to update calendar event IDs in sheet:', sheetErr);
                     }
+                  } catch (sheetErr) {
+                    console.error('Failed to update calendar event IDs in sheet:', sheetErr);
                   }
                 }
               } catch (createErr) {
