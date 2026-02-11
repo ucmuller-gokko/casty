@@ -1243,21 +1243,40 @@ async def update_special_order(payload: SpecialOrderUpdatePayload):
         
         new_time_range = f"{payload.startTime} ~ {payload.endTime}"
         
-        # 1行目のデータから日付を取得（payloadにない場合のフォールバック）
+        # 複数日程対応: キャストごとに行をグルーピングし、日付を分配
+        # target_rows は (row_idx, row_data) のリスト
+        # E列(インデックス4) = castId
+        cast_rows = {}  # castId -> [(row_idx, row_data), ...]
+        for row_idx, row_data in target_rows:
+            cast_id = row_data[4] if len(row_data) > 4 else "unknown"
+            if cast_id not in cast_rows:
+                cast_rows[cast_id] = []
+            cast_rows[cast_id].append((row_idx, row_data))
+        
+        new_dates = payload.dates if payload.dates else []
         current_start_date = target_rows[0][1][6] if len(target_rows[0][1]) > 6 else ""
-        primary_date = payload.dates[0] if (payload.dates and len(payload.dates) > 0) else current_start_date
+        
+        print(f"   Update Info -> Title: {payload.title}, Dates: {new_dates or [current_start_date]}, Time: {new_time_range}")
+        print(f"   Cast groups: {len(cast_rows)}")
 
-        print(f"   Update Info -> Title: {payload.title}, Date: {primary_date}, Time: {new_time_range}")
-
-        for row_idx, _ in target_rows:
-            # C列: Title
-            batch_updates.append({'range': f'C{row_idx}', 'values': [[payload.title]]})
-            # G列: StartDate, H列: EndDate
-            batch_updates.append({'range': f'G{row_idx}:H{row_idx}', 'values': [[primary_date, primary_date]]})
-            # K列: TimeRange
-            batch_updates.append({'range': f'K{row_idx}', 'values': [[new_time_range]]})
-            # L列: SlackThreadTs (シングルクォート付きで小数点保持)
-            batch_updates.append({'range': f'L{row_idx}', 'values': [[f"'{search_ts_str}"]]})
+        for cast_id, rows in cast_rows.items():
+            for i, (row_idx, _) in enumerate(rows):
+                # 日付の分配: 各キャストの行に日付を順番に割り当て
+                if new_dates and i < len(new_dates):
+                    date_for_row = new_dates[i]
+                elif new_dates:
+                    date_for_row = new_dates[-1]  # 日付が足りない場合は最後の日付
+                else:
+                    date_for_row = current_start_date
+                
+                # C列: Title
+                batch_updates.append({'range': f'C{row_idx}', 'values': [[payload.title]]})
+                # G列: StartDate, H列: EndDate
+                batch_updates.append({'range': f'G{row_idx}:H{row_idx}', 'values': [[date_for_row, date_for_row]]})
+                # K列: TimeRange
+                batch_updates.append({'range': f'K{row_idx}', 'values': [[new_time_range]]})
+                # L列: SlackThreadTs (シングルクォート付きで小数点保持)
+                batch_updates.append({'range': f'L{row_idx}', 'values': [[f"'{search_ts_str}"]]})
 
         if batch_updates:
             await ws.batch_update(batch_updates, value_input_option="USER_ENTERED")
