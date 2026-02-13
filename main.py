@@ -224,10 +224,10 @@ def build_order_text(payload: OrderCreatedPayload, upload_error: str = None) -> 
                 # Fix: Use mentions if available
                 cast_disp_list = []
                 for c in cands:
-                    if c.slack_user_id:
-                        cast_disp_list.append(f"<@{c.slack_user_id}>")
-                    else:
-                        cast_disp_list.append(c.castName)
+                    disp = f"<@{c.slack_user_id}>" if c.slack_user_id else c.castName
+                    if c.note:
+                        disp += "：📝 備考あり"
+                    cast_disp_list.append(disp)
                 
                 cast_names = " / ".join(cast_disp_list)
                 lines.append(f"{r_name}：{cast_names}")
@@ -279,7 +279,8 @@ def build_order_text(payload: OrderCreatedPayload, upload_error: str = None) -> 
             cands.sort(key=lambda x: x.rank)
             for cand in cands:
                 cast_disp = f"<@{cand.slack_user_id}>" if cand.slack_user_id else cand.castName
-                line = f"    第{cand.rank}候補：{cast_disp}"
+                note_indicator = "：📝 備考あり" if cand.note else ""
+                line = f"    第{cand.rank}候補：{cast_disp}{note_indicator}"
                 lines.append(line)
                 if cand.conflictInfo:
                     lines.append(f"    🚨 {cand.conflictInfo}")
