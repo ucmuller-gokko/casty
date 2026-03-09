@@ -746,16 +746,19 @@ async def notify_special_order(payload: SpecialOrderPayload):
                         "email": cast_email,
                         "status": status,
                         "time_range": time_range,  # 時間情報を渡す
-                        "rowNumber": None
+                        "rowNumber": None,
+                        "rank": 1
                     })
 
         response_data = {"ok": True, "calendar_events": []}
 
         if new_rows:
             append_res = await ws.append_rows(new_rows, value_input_option="USER_ENTERED")
+            print(f"📝 append_rows result: {append_res}")
             
             if internal_events:
                 updated_range = append_res.get('updates', {}).get('updatedRange', '')
+                print(f"📝 updatedRange: {updated_range}")
                 import re
                 match = re.search(r'!A(\d+):', updated_range)
                 start_row = int(match.group(1)) if match else 0
@@ -767,7 +770,10 @@ async def notify_special_order(payload: SpecialOrderPayload):
                     for ev in internal_events:
                         if ev["castingId"] in id_to_row:
                             ev["rowNumber"] = id_to_row[ev["castingId"]]
-                    response_data["calendar_events"] = internal_events
+                else:
+                    print(f"⚠️ Could not parse start_row from updatedRange: '{updated_range}'. Calendar events will still be returned without rowNumber.")
+                
+                response_data["calendar_events"] = internal_events
 
     except Exception as e:
         print(f"Error in notify_special_order: {e}")
