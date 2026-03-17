@@ -1644,8 +1644,10 @@
         // ボタンの有効/無効を更新
         const deleteBtn = document.getElementById('bulk-delete-btn');
         const statusBtn = document.getElementById('bulk-status-btn');
+        const calendarBtn = document.getElementById('bulk-calendar-btn');
         if (deleteBtn) deleteBtn.disabled = bulkSelectedIds.size === 0;
         if (statusBtn) statusBtn.disabled = bulkSelectedIds.size === 0;
+        if (calendarBtn) calendarBtn.disabled = bulkSelectedIds.size === 0;
 
         // 行のハイライトを更新
         const row = document.querySelector(`.casting-row[data-casting-id="${castingId}"]`);
