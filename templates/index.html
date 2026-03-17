@@ -1285,6 +1285,9 @@
             <button id="bulk-status-btn" class="px-3 py-1.5 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed" ${bulkSelectedIds.size === 0 ? 'disabled' : ''}>
               📝 一括ステータス更新
             </button>
+            <button id="bulk-calendar-btn" class="px-3 py-1.5 bg-green-600 text-white rounded text-sm font-medium hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed" ${bulkSelectedIds.size === 0 ? 'disabled' : ''}>
+              📅 一括カレンダー生成
+            </button>
             <button id="bulk-select-all-btn" class="px-3 py-1.5 bg-gray-600 text-white rounded text-sm font-medium hover:bg-gray-700">
               全選択
             </button>
@@ -1598,6 +1601,10 @@
           openBulkStatusModal();
         });
 
+        view.querySelector('#bulk-calendar-btn')?.addEventListener('click', async () => {
+          await bulkCreateCalendarEvents();
+        });
+
         view.querySelector('#bulk-select-all-btn')?.addEventListener('click', () => {
           // 表示中の全てのcastingIdを選択
           view.querySelectorAll('.casting-row').forEach(row => {
@@ -1814,6 +1821,71 @@
           showMessage(`${successCount}件のステータスを「${newStatus}」に更新しました。`, 'success');
         }
 
+        await renderCastingStatusView(false);
+      }
+
+      async function bulkCreateCalendarEvents() {
+        if (!isAdmin) { showMessage('権限がありません。', 'error'); return; }
+        if (bulkSelectedIds.size === 0) { showMessage('オーダーを選択してください。', 'error'); return; }
+
+        // 内部キャストかつカレンダー未登録のレコードを抽出
+        const targets = [];
+        for (const id of bulkSelectedIds) {
+          const rec = castingData.find(c => c.castingId === id);
+          if (!rec) continue;
+          if (!rec.isInternal) continue;           // 外部キャストはスキップ
+          if (rec.calendarEventId) continue;       // 既にカレンダー登録済みはスキップ
+          if (['NG', 'キャンセル', '削除済み'].includes(rec.status)) continue;
+          targets.push(rec);
+        }
+
+        if (targets.length === 0) {
+          showMessage('対象の内部キャストがありません（既にカレンダー登録済み、外部キャスト、またはNG/キャンセル済み）。', 'info');
+          return;
+        }
+
+        const skipped = bulkSelectedIds.size - targets.length;
+        let confirmMsg = `${targets.length}件の内部キャストにカレンダーイベントを作成しますか？`;
+        if (skipped > 0) {
+          confirmMsg += `\n（${skipped}件は対象外のためスキップされます）`;
+        }
+        const confirmed = confirm(confirmMsg);
+        if (!confirmed) return;
+
+        showProgressBar('カレンダーイベントを作成中...', 0);
+
+        // createInternalHoldEvents 用のイベント配列を構築
+        const events = targets.map(rec => {
+          const cast = castData.find(c => c.castId === rec.castId);
+          return {
+            castingId: rec.castingId,
+            cast: cast || null,
+            roleName: rec.roleName || '',
+            rank: rec.rank || '',
+            mainSub: rec.mainSub || 'その他',
+            accountName: rec.accountName || '',
+            projectName: rec.projectName || '',
+            start: rec.startDate,
+            end: rec.endDate,
+            email: cast?.email || rec.email || '',
+            status: rec.status || '仮キャスティング',
+            rowNumber: null,
+          };
+        });
+
+        try {
+          await createInternalHoldEvents(events);
+          // ローカルキャッシュを更新するためリロード
+          await fetchCastingDataFromSheet();
+          showMessage(`${targets.length}件のカレンダーイベントを作成しました。`, 'success');
+        } catch (e) {
+          console.error('一括カレンダー作成エラー:', e);
+          showMessage('カレンダーイベントの作成に失敗しました。', 'error');
+        }
+
+        hideProgressBar();
+        bulkSelectedIds.clear();
+        bulkSelectMode = false;
         await renderCastingStatusView(false);
       }
 
@@ -2783,6 +2855,7 @@ X、Instagram、YouTube
 
       // ========= Calendar (today red) =========
       function renderCalendar() {
+        console.log('📅 renderCalendar called, isAdmin:', isAdmin);
         const monthYearEl = document.getElementById('current-month-year');
         const grid = document.getElementById('calendar-grid');
         if (!monthYearEl || !grid) return;
@@ -2823,7 +2896,13 @@ X、Instagram、YouTube
           cell.textContent = String(day);
 
           if (isPast) {
-            cell.className = 'p-2 rounded-md text-gray-400 cursor-not-allowed';
+            if (isAdmin) {
+              // 管理者は過去の日付も選択可能
+              cell.className = 'p-2 rounded-md cursor-pointer hover:bg-blue-200 calendar-day text-gray-400';
+              if (isSelected) { cell.classList.remove('text-gray-400'); cell.classList.add('bg-blue-500', 'text-white'); }
+            } else {
+              cell.className = 'p-2 rounded-md text-gray-400 cursor-not-allowed';
+            }
           } else {
             cell.className = 'p-2 rounded-md cursor-pointer hover:bg-blue-200 calendar-day';
             if (isSelected) { cell.classList.add('bg-blue-500', 'text-white'); }
