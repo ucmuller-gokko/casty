@@ -5461,13 +5461,15 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
         const searchProjectId = data.projectId || data.pageId;
 
         if (!targetThreadTs && searchProjectId) {
-          // 1. まずメモリ上のcastingDataから検索
+          // 1. まずメモリ上のcastingDataから検索（削除済み等を除外）
+          const EXCLUDED_STATUSES_THREAD = ['削除済み', 'NG', 'キャンセル', 'キャスティング完了'];
           const existingRecord = castingData.find(c =>
-            c.projectId === searchProjectId && c.slackThreadTs
+            c.projectId === searchProjectId && c.slackThreadTs &&
+            !EXCLUDED_STATUSES_THREAD.includes(c.status)
           );
 
           if (existingRecord) {
-            console.log("Found existing thread in memory:", searchProjectId, existingRecord.slackThreadTs);
+            console.log("Found existing thread in memory:", searchProjectId, existingRecord.slackThreadTs, "status:", existingRecord.status);
             targetThreadTs = existingRecord.slackThreadTs;
             isAdditional = true;
           } else {
@@ -5494,7 +5496,10 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
                 }
 
                 if (rowProjectId === searchProjectId && rowSlackThreadTs) {
-                  console.log("Found existing thread in sheet:", searchProjectId, rowSlackThreadTs);
+                  // J列(index 9) = status をチェックして削除済み等を除外
+                  const rowStatus = row[9] || '';
+                  if (['削除済み', 'NG', 'キャンセル', 'キャスティング完了'].includes(rowStatus)) continue;
+                  console.log("Found existing thread in sheet:", searchProjectId, rowSlackThreadTs, "status:", rowStatus);
                   targetThreadTs = rowSlackThreadTs;
                   isAdditional = true;
                   break;
