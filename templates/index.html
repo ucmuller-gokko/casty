@@ -445,13 +445,22 @@
         // projectId が空の場合は、別案件とみなしてスレッドを再利用しない
         if (!projectId) return null;
 
-        // projectId と accountName が一致し、かつ slackThreadTs を持つレコードを探す
-        // 日付の重なりはチェックせず、案件単位でざっくり探す
+        // 無効なステータスは除外
+        const EXCLUDED_STATUSES = ['削除済み', 'NG', 'キャンセル', 'キャスティング完了'];
+
+        // projectId と accountName が一致し、かつ slackThreadTs を持つ有効なレコードを探す
         const cand = castingData.find(c =>
           c.accountName === accountName &&
           c.projectId === projectId &&
-          c.slackThreadTs
+          c.slackThreadTs &&
+          !EXCLUDED_STATUSES.includes(c.status)
         );
+
+        if (cand) {
+          console.log(`[findExistingThread] 既存スレッド検出: castingId=${cand.castingId}, status=${cand.status}, ts=${cand.slackThreadTs}`);
+        } else {
+          console.log(`[findExistingThread] 既存スレッドなし: account=${accountName}, projectId=${projectId}`);
+        }
         return cand || null;
       }
 
@@ -3495,6 +3504,8 @@ X、Instagram、YouTube
 
           if (!isAdditionalOrder) {
             // --- 初回オーダー：今まで通り /api/notify/order_created を呼ぶ ---
+            // ★修正: スプレッドシートの最新データを取得してから既存スレッドを検索
+            try { await fetchCastingDataFromSheet(); } catch (e) { console.warn('データ再取得失敗:', e); }
             const existingThread = findExistingThreadForOrder(accountName, projectId, Array.from(allDateRanges));
             if (existingThread) {
               // 既存スレッドが見つかった場合は、追加オーダーとして扱う
