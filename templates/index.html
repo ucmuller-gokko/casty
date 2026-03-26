@@ -5370,11 +5370,16 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
 
       // 実際のデータ構築とAPI送信を行う関数
       async function processNewOrder(data) {
-        const shootDate = selectedShooting ? selectedShooting.date : (selectedDates[0] || '');
+        // ★修正: 複数日対応 - selectedDates（カレンダー選択）を常に優先使用
+        // selectedShootingはメタデータ（チーム名・PageID等）の取得用であり、日付の制約には使わない
+        const shootDates = (selectedDates && selectedDates.length > 0) ? [...selectedDates] :
+          (selectedShooting ? [selectedShooting.date] : []);
+        const shootDate = shootDates[0] || ''; // 後方互換性のため維持
         const nowISO = new Date().toISOString();
         const updaterEmail = currentUser?.email || '';
         const internalEvents = [];
         const tempAssignments = {};
+        let castingSeq = 0; // ★追加: 複数行作成時のユニークID用シーケンス
 
         // Collect all orders & Apply Intimacy Note & Conflict Check
         const allOrders = data.projects.flatMap(proj =>
@@ -5389,11 +5394,13 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
                 finalNote = "【インティマシーシーンあり】\n" + finalNote;
               }
 
-              // ★★★ 追加: 競合チェック (Conflict Check) for Drag & Drop Cart ★★★
+              // ★★★ 修正: 競合チェック - 全日付に対して実行 ★★★
               let conflictMsg = null;
-              const targetEpoch = toEpochDay(shootDate);
 
-              if (targetEpoch) {
+              for (const d of shootDates) {
+                const targetEpoch = toEpochDay(d);
+                if (!targetEpoch) continue;
+
                 const conflict = castingData.find(c => {
                   // 1. ステータスチェック（キャンセル・NG・完了は無視）
                   if (['キャンセル', 'NG', 'キャスティング完了'].includes(c.status)) return false;
@@ -5425,12 +5432,13 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
                   const holder = conflict.accountName || '他チーム';
                   conflictMsg = `※先に【${holder}】がキャスティングしています（${conflict.status}）。`;
                   console.warn("🚨 Conflict Detected (D&D):", {
-                    me: { account: data.accountName, project: proj.title, date: shootDate },
+                    me: { account: data.accountName, project: proj.title, date: d },
                     other: { account: conflict.accountName, project: conflict.projectName, status: conflict.status }
                   });
+                  break; // 最初の競合を1つ見つけたら終了
                 }
               }
-              // ★★★ 追加ここまで ★★★
+              // ★★★ 修正ここまで ★★★
 
               return {
                 castingId: 'temp_' + Date.now() + '_' + Math.random(),
@@ -5662,6 +5670,9 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
           castGroups.get(o.castId).push(o);
         });
 
+        // ★修正: 複数日対応 - 日付をrangeにグループ化して各rangeごとに行を作成
+        const dateRanges = groupDatesIntoRanges(shootDates);
+
         for (const [castId, orders] of castGroups) {
           const firstOrder = orders[0];
           const cast = firstOrder.cast;
@@ -5672,28 +5683,11 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
           const mergedNote = orders.map(o => o.note).filter(n => n).join(' / ');
 
           const minRank = Math.min(...orders.map(o => o.rank));
-          const castingId = 'casting_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-          const castPriority = getNextCastPriority(castId, shootDate, shootDate, tempAssignments);
-          tempAssignments[`${castId}_${shootDate}_${shootDate}`] = castPriority;
 
           // 内部キャスト: 第1候補は打診中、それ以外は仮キャスティング
           const initialStatus = cast.isInternal
             ? (minRank === 1 ? '打診中' : '仮キャスティング')
             : 'オーダー待ち';
-
-          if (cast.isInternal) {
-            internalEvents.push({
-              accountName: data.accountName,
-              projectName: mergedProjectName,
-              roleName: mergedRoleName,
-              mainSub: mergedType,
-              castingId: castingId,
-              status: initialStatus,
-              start: shootDate,
-              end: shootDate,
-              email: cast.email,
-            });
-          }
 
           const structureData = orders.map(o => ({
             project: o.projectName,
@@ -5704,13 +5698,34 @@ https://brass-soursop-b4a.notion.site/TikTok-fafa93aeaeaf4bbe947a6713db61757f
           }));
           const structureJson = JSON.stringify(structureData);
 
-          newRows.push([
-            castingId, data.accountName, mergedProjectName, mergedRoleName,
-            cast.castId, cast.name, shootDate, shootDate, minRank.toString(),
-            initialStatus, mergedNote, slackThreadTs, slackPermalink,
-            mergedType, '', data.pageId, nowISO, updaterEmail, castPriority,
-            cast.isInternal ? '内部' : '外部', cast.email || '', '', structureJson
-          ]);
+          // ★修正: 各日付rangeごとに1行ずつ作成（飛び日は複数行、連続日は1行にまとまる）
+          for (const rg of dateRanges) {
+            const castingId = 'casting_' + Date.now() + '_' + (castingSeq++) + '_' + Math.random().toString(36).substr(2, 9);
+            const castPriority = getNextCastPriority(castId, rg.start, rg.end, tempAssignments);
+            tempAssignments[`${castId}_${rg.start}_${rg.end}`] = castPriority;
+
+            if (cast.isInternal) {
+              internalEvents.push({
+                accountName: data.accountName,
+                projectName: mergedProjectName,
+                roleName: mergedRoleName,
+                mainSub: mergedType,
+                castingId: castingId,
+                status: initialStatus,
+                start: rg.start,
+                end: rg.end,
+                email: cast.email,
+              });
+            }
+
+            newRows.push([
+              castingId, data.accountName, mergedProjectName, mergedRoleName,
+              cast.castId, cast.name, rg.start, rg.end, minRank.toString(),
+              initialStatus, mergedNote, slackThreadTs, slackPermalink,
+              mergedType, '', data.pageId, nowISO, updaterEmail, castPriority,
+              cast.isInternal ? '内部' : '外部', cast.email || '', '', structureJson
+            ]);
+          }
         }
 
         // 4. Batch Append
